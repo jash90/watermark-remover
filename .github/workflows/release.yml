@@ -56,10 +56,12 @@ jobs:
       - name: Install dependencies (Windows only)
         if: matrix.platform == 'windows-latest'
         run: |
-          choco install opencv -y
-          echo "OPENCV_LINK_LIBS=opencv_world4" >> $env:GITHUB_ENV
-          echo "OPENCV_LINK_PATHS=C:\tools\opencv\build\x64\vc16\lib" >> $env:GITHUB_ENV
-          echo "OPENCV_INCLUDE_PATHS=C:\tools\opencv\build\include" >> $env:GITHUB_ENV
+          # Use vcpkg for OpenCV (pre-installed on GitHub runners)
+          vcpkg integrate install
+          vcpkg install opencv4:x64-windows
+          # Set environment variables for opencv-rust crate
+          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+          echo "VCPKGRS_DYNAMIC=1" >> $env:GITHUB_ENV
 
       - name: Install frontend dependencies
         run: npm install
