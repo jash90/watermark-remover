@@ -56,6 +56,7 @@ struct CandidateContent {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ResponsePart {
     #[serde(rename = "inlineData")]
     inline_data: Option<ResponseInlineData>,
@@ -63,6 +64,7 @@ struct ResponsePart {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct ResponseInlineData {
     #[serde(rename = "mimeType")]
     mime_type: String,

@@ -77,7 +77,7 @@ pub fn get_progress() -> VideoProgress {
 
 /// Get video information
 pub fn get_video_info(video_path: &str) -> Result<VideoInfo, String> {
-    let mut cap = VideoCapture::from_file(video_path, CAP_ANY)
+    let cap = VideoCapture::from_file(video_path, CAP_ANY)
         .map_err(|e| format!("Failed to open video: {}", e))?;
 
     if !cap.is_opened().map_err(|e| format!("Failed to check video: {}", e))? {

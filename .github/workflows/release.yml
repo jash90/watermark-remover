@@ -14,14 +14,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-latest'
+          - platform: 'macos-14'
             args: '--target aarch64-apple-darwin'
-          - platform: 'macos-latest'
+            rust_target: 'aarch64-apple-darwin'
+          - platform: 'macos-13'
             args: '--target x86_64-apple-darwin'
+            rust_target: 'x86_64-apple-darwin'
           - platform: 'ubuntu-22.04'
             args: ''
+            rust_target: ''
           - platform: 'windows-latest'
             args: ''
+            rust_target: ''
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -35,7 +39,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.rust_target }}
 
       - name: Install dependencies (Ubuntu only)
         if: matrix.platform == 'ubuntu-22.04'
@@ -45,7 +49,7 @@ jobs:
           sudo apt-get install -y libopencv-dev clang libclang-dev
 
       - name: Install dependencies (macOS only)
-        if: matrix.platform == 'macos-latest'
+        if: startsWith(matrix.platform, 'macos')
         run: |
           brew install opencv
 
