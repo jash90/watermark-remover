@@ -17,7 +17,7 @@ jobs:
           - platform: 'macos-latest'
             args: '--target aarch64-apple-darwin'
             rust_target: 'aarch64-apple-darwin'
-          - platform: 'macos-latest'
+          - platform: 'macos-15-intel'
             args: '--target x86_64-apple-darwin'
             rust_target: 'x86_64-apple-darwin'
           - platform: 'ubuntu-22.04'
@@ -51,16 +51,7 @@ jobs:
       - name: Install dependencies (macOS only)
         if: startsWith(matrix.platform, 'macos')
         run: |
-          if [[ "${{ matrix.rust_target }}" == "x86_64-apple-darwin" ]]; then
-            # Install x86_64 Homebrew and OpenCV via Rosetta for cross-compilation
-            arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-            arch -x86_64 /usr/local/bin/brew install opencv
-            # Set environment variables for x86_64 OpenCV
-            echo "OPENCV_LINK_PATHS=/usr/local/lib" >> $GITHUB_ENV
-            echo "OPENCV_INCLUDE_PATHS=/usr/local/include/opencv4" >> $GITHUB_ENV
-          else
-            brew install opencv
-          fi
+          brew install opencv
 
       - name: Install dependencies (Windows only)
         if: matrix.platform == 'windows-latest'
