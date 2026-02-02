@@ -47,7 +47,6 @@ export function RegionSelector({
   const getImageCoordinates = useCallback((e: MouseEvent<HTMLDivElement>): Point | null => {
     if (!containerRef.current) return null;
 
-    const rect = containerRef.current.getBoundingClientRect();
     const imgElement = containerRef.current.querySelector('img');
     if (!imgElement) return null;
 

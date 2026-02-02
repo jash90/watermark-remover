@@ -75,22 +75,6 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     }
   };
 
-  const handleClear = async () => {
-    setApiKey('');
-    setIsLoading(true);
-    try {
-      await invoke('set_gemini_api_key', { apiKey: '' });
-      setSavedApiKey('');
-      setModels([]);
-      setMessage({ type: 'success', text: 'API key cleared' });
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      setMessage({ type: 'error', text: `Failed to clear: ${errorMessage}` });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const handleListModels = async () => {
     if (!apiKey) {
       setMessage({ type: 'error', text: 'Please enter an API key first' });

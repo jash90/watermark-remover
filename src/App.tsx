@@ -18,6 +18,7 @@ const DEFAULT_OPTIONS: RemovalOptions = {
   dilate_pixels: 3,
   inpaint_radius: 5,
   processing_method: 'local',
+  lossless: false,
 };
 
 function App() {
@@ -54,7 +55,6 @@ function App() {
     extractVideoFrame,
     processVideo,
     cancelVideoProcessing,
-    processBatch,
     checkApiKey,
     clearError,
   } = useWatermarkRemoval();
@@ -111,11 +111,6 @@ function App() {
     setProcessedImage(null);
     setProcessedPath(null);
   }, [getImageInfo, getVideoInfo, loadImageBase64, extractVideoFrame, clearError]);
-
-  // Legacy handler for backwards compatibility
-  const handleImageSelect = useCallback(async (path: string) => {
-    await handleMediaSelect(path, 'image');
-  }, [handleMediaSelect]);
 
   // Handler for batch file selection
   const handleBatchSelect = useCallback(async (paths: string[]) => {

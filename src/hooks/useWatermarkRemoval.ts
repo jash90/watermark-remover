@@ -63,7 +63,7 @@ export function useWatermarkRemoval(): UseWatermarkRemovalReturn {
   const [processedResult, setProcessedResult] = useState<ProcessResult | null>(null);
   const [videoProgress, setVideoProgress] = useState<VideoProgress | null>(null);
   const [hasApiKey, setHasApiKey] = useState(false);
-  const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Check for API key on mount
   const checkApiKey = useCallback(async () => {
