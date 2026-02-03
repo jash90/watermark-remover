@@ -58,7 +58,7 @@ jobs:
         run: |
           # Install OpenCV via Chocolatey (pre-built binaries)
           choco install opencv -y
-          choco install llvm --version=17.0.6 --allow-downgrade -y
+          choco install llvm --version=19.1.7 --allow-downgrade -y
 
           # Set environment variables for opencv-rust crate
           echo "OPENCV_LINK_LIBS=opencv_world4100" >> $env:GITHUB_ENV
