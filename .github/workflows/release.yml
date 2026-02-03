@@ -58,16 +58,17 @@ jobs:
         run: |
           # Install OpenCV via Chocolatey (pre-built binaries)
           choco install opencv -y
-          choco install llvm --version=19.1.7 --allow-downgrade -y
 
           # Set environment variables for opencv-rust crate
           echo "OPENCV_LINK_LIBS=opencv_world4100" >> $env:GITHUB_ENV
           echo "OPENCV_LINK_PATHS=C:\tools\opencv\build\x64\vc16\lib" >> $env:GITHUB_ENV
           echo "OPENCV_INCLUDE_PATHS=C:\tools\opencv\build\include" >> $env:GITHUB_ENV
 
-          # Set LLVM paths for opencv-rust binding generator
+          # Set LLVM paths for opencv-rust binding generator (use pre-installed LLVM 20)
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
-          echo "LLVM_CONFIG_PATH=C:\Program Files\LLVM\bin\llvm-config.exe" >> $env:GITHUB_ENV
+
+          # Enable backtrace for debugging
+          echo "RUST_BACKTRACE=1" >> $env:GITHUB_ENV
 
       - name: Install frontend dependencies
         run: npm install
