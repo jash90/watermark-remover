@@ -1,38 +1,16 @@
 import { useState, useCallback, DragEvent } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 
-import type { MediaType } from '../types/watermark';
-
-interface MediaDropZoneProps {
-  onMediaSelect: (path: string, type: MediaType) => void;
+interface ImageDropZoneProps {
+  onMediaSelect: (path: string) => void;
   onBatchSelect?: (paths: string[]) => void;
   disabled?: boolean;
 }
 
-// Backwards compatibility alias
-interface ImageDropZoneProps extends MediaDropZoneProps {
-  onImageSelect?: (path: string) => void;
-}
-
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
-const VIDEO_EXTENSIONS = ['mp4', 'avi', 'mov', 'mkv', 'webm'];
-const ACCEPTED_EXTENSIONS = [...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS];
 
-function getMediaType(extension: string): MediaType {
-  return VIDEO_EXTENSIONS.includes(extension.toLowerCase()) ? 'video' : 'image';
-}
-
-export function ImageDropZone({ onMediaSelect, onBatchSelect, onImageSelect, disabled = false }: ImageDropZoneProps) {
+export function ImageDropZone({ onMediaSelect, onBatchSelect, disabled = false }: ImageDropZoneProps) {
   const [isDragging, setIsDragging] = useState(false);
-
-  // Handle both new and legacy callbacks
-  const handleSelect = (path: string, type: MediaType) => {
-    if (onMediaSelect) {
-      onMediaSelect(path, type);
-    } else if (onImageSelect && type === 'image') {
-      onImageSelect(path);
-    }
-  };
 
   // Handle multiple file selection for batch processing
   const handleBatchSelect = (paths: string[]) => {
@@ -78,7 +56,7 @@ export function ImageDropZone({ onMediaSelect, onBatchSelect, onImageSelect, dis
     if (files.length > 0) {
       const file = files[0];
       const extension = file.name.split('.').pop()?.toLowerCase();
-      if (extension && ACCEPTED_EXTENSIONS.includes(extension)) {
+      if (extension && IMAGE_EXTENSIONS.includes(extension)) {
         // Note: In Tauri, we need to use the dialog for proper file access
         // Drag and drop gives us the file name but we need to use dialog for path
         handleOpenDialog();
@@ -94,36 +72,26 @@ export function ImageDropZone({ onMediaSelect, onBatchSelect, onImageSelect, dis
         multiple: true,
         filters: [
           {
-            name: 'Media Files',
-            extensions: ACCEPTED_EXTENSIONS,
-          },
-          {
             name: 'Images',
             extensions: IMAGE_EXTENSIONS,
-          },
-          {
-            name: 'Videos',
-            extensions: VIDEO_EXTENSIONS,
           },
         ],
       });
 
       if (selected) {
         if (Array.isArray(selected) && selected.length > 1) {
-          // Multiple files selected - batch mode (images only)
+          // Multiple files selected - batch mode
           handleBatchSelect(selected);
         } else {
           // Single file selected
           const path = Array.isArray(selected) ? selected[0] : selected;
-          const extension = path.split('.').pop()?.toLowerCase() || '';
-          const type = getMediaType(extension);
-          handleSelect(path, type);
+          onMediaSelect(path);
         }
       }
     } catch (err) {
       console.error('Failed to open file dialog:', err);
     }
-  }, [handleSelect, handleBatchSelect, disabled]);
+  }, [onMediaSelect, handleBatchSelect, disabled]);
 
   return (
     <div
@@ -155,10 +123,7 @@ export function ImageDropZone({ onMediaSelect, onBatchSelect, onImageSelect, dis
           {isDragging ? 'Drop files here' : 'Click or drag files to start'}
         </p>
         <p className="drop-zone-hint">
-          Images: PNG, JPG, JPEG, WebP, GIF
-        </p>
-        <p className="drop-zone-hint">
-          Videos: MP4, AVI, MOV, MKV, WebM
+          Supported formats: PNG, JPG, JPEG, WebP, GIF
         </p>
         <p className="drop-zone-hint batch-hint">
           Select multiple images for batch processing

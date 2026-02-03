@@ -6,10 +6,6 @@ export interface WatermarkRegion {
 }
 
 export interface RemovalOptions {
-  algorithm: 'telea' | 'navier_stokes';
-  dilate_pixels: number;
-  inpaint_radius: number;
-  processing_method: 'local' | 'cloud';
   lossless: boolean;
 }
 
@@ -43,38 +39,6 @@ export interface AppState {
   processedPath: string | null;
   isProcessing: boolean;
   error: string | null;
-}
-
-// Video-specific types
-export interface VideoInfo {
-  width: number;
-  height: number;
-  fps: number;
-  frame_count: number;
-  duration_secs: number;
-  codec: string;
-  path: string;
-}
-
-export interface VideoProgress {
-  current_frame: number;
-  total_frames: number;
-  percent: number;
-  estimated_remaining_secs: number | null;
-}
-
-export interface VideoProcessResult {
-  output_path: string;
-  frames_processed: number;
-  duration_secs: number;
-}
-
-export type MediaType = 'image' | 'video';
-
-export interface MediaFile {
-  path: string;
-  type: MediaType;
-  extension: string;
 }
 
 // Batch processing types

@@ -4,37 +4,29 @@ import { ImageDropZone } from './components/ImageDropZone';
 import { RegionSelector } from './components/RegionSelector';
 import { PreviewPanel } from './components/PreviewPanel';
 import { OptionsPanel } from './components/OptionsPanel';
-import { VideoProgress } from './components/VideoProgress';
 import { SettingsModal } from './components/SettingsModal';
 import { BatchQueuePanel } from './components/BatchQueuePanel';
 import { useWatermarkRemoval } from './hooks/useWatermarkRemoval';
-import type { WatermarkRegion, RemovalOptions, ImageInfo, VideoInfo, MediaType, BatchFile, BatchProgress } from './types/watermark';
+import type { WatermarkRegion, RemovalOptions, ImageInfo, BatchFile, BatchProgress } from './types/watermark';
 import './App.css';
 
-type AppStage = 'upload' | 'select' | 'video-processing' | 'preview' | 'batch-select' | 'batch-processing' | 'batch-results';
+type AppStage = 'upload' | 'select' | 'preview' | 'batch-select' | 'batch-processing' | 'batch-results';
 
 const DEFAULT_OPTIONS: RemovalOptions = {
-  algorithm: 'telea',
-  dilate_pixels: 3,
-  inpaint_radius: 5,
-  processing_method: 'local',
   lossless: false,
 };
 
 function App() {
   const [stage, setStage] = useState<AppStage>('upload');
-  const [mediaType, setMediaType] = useState<MediaType>('image');
   const [imagePath, setImagePath] = useState<string | null>(null);
   const [imageBase64, setImageBase64] = useState<string | null>(null);
   const [imageInfo, setImageInfo] = useState<ImageInfo | null>(null);
-  const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null);
   const [selectedRegion, setSelectedRegion] = useState<WatermarkRegion | null>(null);
   const [options, setOptions] = useState<RemovalOptions>(DEFAULT_OPTIONS);
   const [processedImage, setProcessedImage] = useState<string | null>(null);
   const [processedPath, setProcessedPath] = useState<string | null>(null);
   const [originalSize, setOriginalSize] = useState<number | null>(null);
   const [processedSize, setProcessedSize] = useState<number | null>(null);
-  const [videoProcessingStartTime, setVideoProcessingStartTime] = useState<number>(0);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   // Batch processing state
@@ -44,17 +36,12 @@ function App() {
   const {
     isProcessing,
     error,
-    videoProgress,
     hasApiKey,
     removeWatermark,
     getImageInfo,
     loadImageBase64,
     saveProcessedImage,
     cleanupTempFiles,
-    getVideoInfo,
-    extractVideoFrame,
-    processVideo,
-    cancelVideoProcessing,
     checkApiKey,
     clearError,
   } = useWatermarkRemoval();
@@ -72,45 +59,23 @@ function App() {
     };
   }, [cleanupTempFiles]);
 
-  const handleMediaSelect = useCallback(async (path: string, type: MediaType) => {
+  const handleMediaSelect = useCallback(async (path: string) => {
     clearError();
     setImagePath(path);
-    setMediaType(type);
 
-    if (type === 'video') {
-      // Handle video file
-      const info = await getVideoInfo(path);
-      if (!info) return;
-      setVideoInfo(info);
+    const info = await getImageInfo(path);
+    if (!info) return;
+    setImageInfo(info);
 
-      // Extract first frame for region selection
-      const frameBase64 = await extractVideoFrame(path);
-      if (!frameBase64) return;
-      setImageBase64(frameBase64);
-
-      // Set imageInfo for RegionSelector compatibility
-      setImageInfo({
-        width: info.width,
-        height: info.height,
-        path: path,
-      });
-    } else {
-      // Handle image file
-      const info = await getImageInfo(path);
-      if (!info) return;
-      setImageInfo(info);
-      setVideoInfo(null);
-
-      const base64 = await loadImageBase64(path);
-      if (!base64) return;
-      setImageBase64(base64);
-    }
+    const base64 = await loadImageBase64(path);
+    if (!base64) return;
+    setImageBase64(base64);
 
     setStage('select');
     setSelectedRegion(null);
     setProcessedImage(null);
     setProcessedPath(null);
-  }, [getImageInfo, getVideoInfo, loadImageBase64, extractVideoFrame, clearError]);
+  }, [getImageInfo, loadImageBase64, clearError]);
 
   // Handler for batch file selection
   const handleBatchSelect = useCallback(async (paths: string[]) => {
@@ -136,7 +101,6 @@ function App() {
     if (!base64) return;
     setImageBase64(base64);
     setImagePath(firstPath);
-    setMediaType('image');
 
     setStage('batch-select');
     setSelectedRegion(null);
@@ -241,52 +205,33 @@ function App() {
   const handleRemoveWatermark = useCallback(async () => {
     if (!imagePath || !selectedRegion) return;
 
-    if (mediaType === 'video') {
-      // Start video processing
-      setVideoProcessingStartTime(Date.now());
-      setStage('video-processing');
-
-      const result = await processVideo(imagePath, selectedRegion, options);
-      if (result) {
-        setProcessedPath(result.output_path);
-        // For videos, we don't have a base64 preview - just show success
-        setStage('preview');
-      } else {
-        // Processing failed or was cancelled
-        setStage('select');
-      }
-    } else {
-      // Image processing (existing logic)
-      const result = await removeWatermark(imagePath, selectedRegion, options);
-      if (result && result.base64_preview) {
-        setProcessedImage(result.base64_preview);
-        setProcessedPath(result.output_path);
-        setOriginalSize(result.original_size);
-        setProcessedSize(result.processed_size);
-        setStage('preview');
-      }
+    const result = await removeWatermark(imagePath, selectedRegion, options);
+    if (result && result.base64_preview) {
+      setProcessedImage(result.base64_preview);
+      setProcessedPath(result.output_path);
+      setOriginalSize(result.original_size);
+      setProcessedSize(result.processed_size);
+      setStage('preview');
     }
-  }, [imagePath, selectedRegion, options, mediaType, removeWatermark, processVideo]);
+  }, [imagePath, selectedRegion, options, removeWatermark]);
 
   const handleSave = useCallback(async () => {
     if (!processedPath || !imagePath) return;
 
-    const isVideo = mediaType === 'video';
     // Get extension from processedPath (may differ from original if lossless converted JPEG→PNG)
-    const extension = isVideo ? 'mp4' : (processedPath.split('.').pop() || 'png');
+    const extension = processedPath.split('.').pop() || 'png';
 
     // Extract original filename without extension
     const pathParts = imagePath.split('/');
     const originalFilename = pathParts[pathParts.length - 1];
     const nameWithoutExt = originalFilename.replace(/\.[^/.]+$/, '');
 
-    const filterName = isVideo ? 'Videos' : 'Images';
     const defaultName = `${nameWithoutExt}_watermark.${extension}`;
 
     const destination = await save({
       filters: [
         {
-          name: filterName,
+          name: 'Images',
           extensions: [extension],
         },
       ],
@@ -294,20 +239,15 @@ function App() {
     });
 
     if (destination) {
-      const success = await saveProcessedImage(processedPath, destination);
-      if (success) {
-        // Optionally show success message
-      }
+      await saveProcessedImage(processedPath, destination);
     }
-  }, [processedPath, imagePath, mediaType, saveProcessedImage]);
+  }, [processedPath, imagePath, saveProcessedImage]);
 
   const handleReset = useCallback(() => {
     setStage('upload');
-    setMediaType('image');
     setImagePath(null);
     setImageBase64(null);
     setImageInfo(null);
-    setVideoInfo(null);
     setSelectedRegion(null);
     setProcessedImage(null);
     setProcessedPath(null);
@@ -320,18 +260,13 @@ function App() {
     cleanupTempFiles();
   }, [clearError, cleanupTempFiles]);
 
-  const handleCancelVideoProcessing = useCallback(async () => {
-    await cancelVideoProcessing();
-    setStage('select');
-  }, [cancelVideoProcessing]);
-
   const handleBack = useCallback(() => {
     if (stage === 'preview') {
       setStage('select');
       setProcessedImage(null);
       setProcessedPath(null);
-    } else if (stage === 'video-processing' || stage === 'batch-processing') {
-      // Cannot go back during processing - user must cancel
+    } else if (stage === 'batch-processing') {
+      // Cannot go back during processing
       return;
     } else if (stage === 'batch-results') {
       setStage('batch-select');
@@ -405,18 +340,6 @@ function App() {
                 disabled={isProcessing}
               />
               <div className="select-sidebar">
-                {mediaType === 'video' && videoInfo && (
-                  <div className="video-info-panel">
-                    <h4>Video Info</h4>
-                    <p>Resolution: {videoInfo.width} x {videoInfo.height}</p>
-                    <p>Duration: {videoInfo.duration_secs.toFixed(1)}s</p>
-                    <p>Frames: {videoInfo.frame_count}</p>
-                    <p>FPS: {videoInfo.fps.toFixed(2)}</p>
-                    <p className="video-warning">
-                      Processing {videoInfo.frame_count} frames may take a while.
-                    </p>
-                  </div>
-                )}
                 <OptionsPanel
                   options={options}
                   onChange={setOptions}
@@ -437,31 +360,19 @@ function App() {
                 <button
                   className="btn btn-primary btn-large"
                   onClick={handleRemoveWatermark}
-                  disabled={!selectedRegion || isProcessing}
+                  disabled={!selectedRegion || isProcessing || !hasApiKey}
                 >
                   {isProcessing ? (
                     <>
                       <span className="spinner" />
                       Processing...
                     </>
-                  ) : mediaType === 'video' ? (
-                    'Process Video'
                   ) : (
                     'Remove Watermark'
                   )}
                 </button>
               </div>
             </div>
-          </div>
-        )}
-
-        {stage === 'video-processing' && videoProgress && (
-          <div className="video-processing-stage">
-            <VideoProgress
-              progress={videoProgress}
-              onCancel={handleCancelVideoProcessing}
-              startTime={videoProcessingStartTime}
-            />
           </div>
         )}
 
@@ -505,7 +416,7 @@ function App() {
                 <button
                   className="btn btn-primary btn-large"
                   onClick={handleProcessBatch}
-                  disabled={!selectedRegion || isProcessing || batchFiles.length === 0}
+                  disabled={!selectedRegion || isProcessing || batchFiles.length === 0 || !hasApiKey}
                 >
                   Process All ({batchFiles.length} files)
                 </button>
@@ -573,9 +484,9 @@ function App() {
           </div>
         )}
 
-        {stage === 'preview' && imageInfo && (mediaType === 'image' ? processedImage : processedPath) && (
+        {stage === 'preview' && imageInfo && processedImage && (
           <div className="preview-stage">
-            {mediaType === 'image' && imageBase64 && processedImage ? (
+            {imageBase64 && processedImage && (
               <PreviewPanel
                 originalImage={imageBase64}
                 processedImage={processedImage}
@@ -584,39 +495,13 @@ function App() {
                 originalSize={originalSize ?? undefined}
                 processedSize={processedSize ?? undefined}
               />
-            ) : (
-              <div className="video-complete-panel">
-                <div className="video-complete-icon">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    width="80"
-                    height="80"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-                    <polyline points="22 4 12 14.01 9 11.01" />
-                  </svg>
-                </div>
-                <h2>Video Processing Complete</h2>
-                <p>The watermark has been successfully removed from all frames.</p>
-                {videoInfo && (
-                  <p className="video-stats">
-                    Processed {videoInfo.frame_count} frames ({videoInfo.duration_secs.toFixed(1)} seconds)
-                  </p>
-                )}
-              </div>
             )}
             <div className="preview-actions">
               <button className="btn btn-secondary" onClick={handleBack}>
                 Adjust Selection
               </button>
               <button className="btn btn-primary btn-large" onClick={handleSave}>
-                Save {mediaType === 'video' ? 'Video' : 'Result'}
+                Save Result
               </button>
             </div>
           </div>
@@ -624,9 +509,7 @@ function App() {
       </main>
 
       <footer className="app-footer">
-        <p>
-          Powered by {options.processing_method === 'cloud' ? 'Google Gemini AI' : 'OpenCV Inpainting'}
-        </p>
+        <p>Powered by Google Gemini AI</p>
       </footer>
 
       <SettingsModal isOpen={isSettingsOpen} onClose={handleSettingsClose} />
