@@ -95,6 +95,7 @@ jobs:
 
       - name: Setup keychain and certificates (macOS)
         if: runner.os == 'macOS'
+        working-directory: fastlane
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -102,8 +103,8 @@ jobs:
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
-          cd fastlane && bundle exec fastlane setup_ci_keychain
-          cd fastlane && bundle exec fastlane sync_certs
+          bundle exec fastlane setup_ci_keychain
+          bundle exec fastlane sync_certs
 
       - name: Build the app
         uses: tauri-apps/tauri-action@v0
