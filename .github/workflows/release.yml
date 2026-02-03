@@ -46,29 +46,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-          sudo apt-get install -y libopencv-dev clang libclang-dev
-
-      - name: Install dependencies (macOS only)
-        if: startsWith(matrix.platform, 'macos')
-        run: |
-          brew install opencv
-
-      - name: Install dependencies (Windows only)
-        if: matrix.platform == 'windows-latest'
-        run: |
-          # Install OpenCV via Chocolatey (pre-built binaries)
-          choco install opencv -y
-
-          # Set environment variables for opencv-rust crate
-          echo "OPENCV_LINK_LIBS=opencv_world4100" >> $env:GITHUB_ENV
-          echo "OPENCV_LINK_PATHS=C:\tools\opencv\build\x64\vc16\lib" >> $env:GITHUB_ENV
-          echo "OPENCV_INCLUDE_PATHS=C:\tools\opencv\build\include" >> $env:GITHUB_ENV
-
-          # Set LLVM paths for opencv-rust binding generator (use pre-installed LLVM 20)
-          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
-
-          # Enable backtrace for debugging
-          echo "RUST_BACKTRACE=1" >> $env:GITHUB_ENV
 
       - name: Install frontend dependencies
         run: npm install
@@ -83,14 +60,16 @@ jobs:
           releaseBody: |
             ## Watermark Remover
 
-            Desktop application for removing watermarks from images and videos.
+            Desktop application for removing watermarks from images using AI.
 
             ### Features
-            - Local processing with OpenCV inpainting
-            - Cloud processing with Google Gemini AI
-            - Video watermark removal
-            - Batch processing
+            - AI-powered watermark removal with Google Gemini
             - Before/After comparison
+            - Simple and lightweight
+
+            ### Requirements
+            - Google Gemini API key
+            - Internet connection
 
             ### Downloads
             - **Windows**: `.msi` or `.exe` installer
