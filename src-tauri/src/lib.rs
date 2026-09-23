@@ -1,6 +1,7 @@
 mod commands;
 pub mod image_processor;
 pub mod removal;
+pub mod upscale;
 
 use commands::{
     // Image commands
