@@ -1,6 +1,7 @@
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{DynamicImage, ImageEncoder, ImageFormat, ImageReader};
 use jpeg_encoder::{ColorType, QuantizationTableType, SamplingFactor};
+use std::collections::HashMap;
 use std::io::Cursor;
 
 /// Decodes an image and applies its EXIF orientation, so pixel coordinates
@@ -137,11 +138,67 @@ pub fn read_jpeg_profile(bytes: &[u8]) -> Option<JpegProfile> {
     Some(JpegProfile { luma, chroma, sampling: (h, v) })
 }
 
-/// Encodes `img`. For JPEG, `jpeg` carries the source's compression settings so
-/// an unchanged photo doesn't grow; without it, quality 90 with 4:2:0 is used.
-pub fn encode(img: &DynamicImage, format: OutputFormat, jpeg: Option<&JpegProfile>) -> Result<Vec<u8>, String> {
+/// Palette of an indexed (colour type 3) PNG, as RGBA with tRNS alpha applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PngPalette {
+    pub colors: Vec<[u8; 4]>,
+    pub bit_depth: u8,
+}
+
+/// How the source file was stored, so the output can be stored the same way.
+#[derive(Debug, Clone, Default)]
+pub struct SourceHints {
+    pub jpeg: Option<JpegProfile>,
+    pub png_palette: Option<PngPalette>,
+}
+
+pub fn read_source_hints(bytes: &[u8]) -> SourceHints {
+    SourceHints { jpeg: read_jpeg_profile(bytes), png_palette: read_png_palette(bytes) }
+}
+
+fn read_png_palette(bytes: &[u8]) -> Option<PngPalette> {
+    const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    if bytes.get(..8)? != SIGNATURE {
+        return None;
+    }
+    let (mut colour_type, mut bit_depth) = (0u8, 8u8);
+    let (mut plte, mut trns): (Option<&[u8]>, Option<&[u8]>) = (None, None);
+    let mut i = 8;
+    while i + 8 <= bytes.len() {
+        let len = u32::from_be_bytes(bytes[i..i + 4].try_into().ok()?) as usize;
+        let data = bytes.get(i + 8..i + 8 + len)?;
+        match &bytes[i + 4..i + 8] {
+            b"IHDR" => {
+                bit_depth = *data.get(8)?;
+                colour_type = *data.get(9)?;
+            }
+            b"PLTE" => plte = Some(data),
+            b"tRNS" => trns = Some(data),
+            b"IDAT" | b"IEND" => break,
+            _ => {}
+        }
+        i += 12 + len;
+    }
+    if colour_type != 3 {
+        return None;
+    }
+    let colors = plte?
+        .chunks_exact(3)
+        .enumerate()
+        .map(|(k, c)| [c[0], c[1], c[2], trns.and_then(|t| t.get(k).copied()).unwrap_or(255)])
+        .collect();
+    Some(PngPalette { colors, bit_depth })
+}
+
+/// Encodes `img`, storing it the way the source was stored where possible:
+/// JPEG with the source's quantization tables and subsampling, PNG with the
+/// source's palette. This keeps the output about the size of the input.
+pub fn encode(img: &DynamicImage, format: OutputFormat, hints: &SourceHints) -> Result<Vec<u8>, String> {
     match format {
-        OutputFormat::Jpeg => encode_jpeg(img, jpeg),
+        OutputFormat::Jpeg => encode_jpeg(img, hints.jpeg.as_ref()),
+        OutputFormat::Png if hints.png_palette.is_some() => {
+            encode_indexed_png(img, hints.png_palette.as_ref().expect("checked above"))
+        }
         OutputFormat::Png => {
             let mut buf = Vec::new();
             PngEncoder::new_with_quality(&mut buf, CompressionType::Best, FilterType::Adaptive)
@@ -157,6 +214,53 @@ pub fn encode(img: &DynamicImage, format: OutputFormat, jpeg: Option<&JpegProfil
             Ok(buf.into_inner())
         }
     }
+}
+
+fn encode_indexed_png(img: &DynamicImage, palette: &PngPalette) -> Result<Vec<u8>, String> {
+    let rgba = img.to_rgba8();
+    let mut lookup: HashMap<[u8; 4], u8> = HashMap::new();
+    for (k, c) in palette.colors.iter().enumerate().rev() {
+        lookup.insert(*c, k as u8);
+    }
+    let mut nearest = |p: [u8; 4]| -> u8 {
+        *lookup.entry(p).or_insert_with(|| {
+            let dist = |c: &[u8; 4]| (0..4).map(|i| (c[i] as i32 - p[i] as i32).pow(2)).sum::<i32>();
+            palette.colors.iter().enumerate().min_by_key(|(_, c)| dist(c)).map_or(0, |(k, _)| k as u8)
+        })
+    };
+    let depth = palette.bit_depth as u32;
+    let per_byte = 8 / depth;
+    let row_bytes = rgba.width().div_ceil(per_byte) as usize;
+    let mut data = vec![0u8; row_bytes * rgba.height() as usize];
+    for (x, y, p) in rgba.enumerate_pixels() {
+        let index = nearest(p.0) as u32;
+        let byte = y as usize * row_bytes + (x / per_byte) as usize;
+        let shift = 8 - depth * (x % per_byte + 1);
+        data[byte] |= (index << shift) as u8;
+    }
+
+    let bit_depth = match palette.bit_depth {
+        1 => png::BitDepth::One,
+        2 => png::BitDepth::Two,
+        4 => png::BitDepth::Four,
+        _ => png::BitDepth::Eight,
+    };
+    let mut buf = Vec::new();
+    let mut encoder = png::Encoder::new(&mut buf, rgba.width(), rgba.height());
+    encoder.set_color(png::ColorType::Indexed);
+    encoder.set_depth(bit_depth);
+    encoder.set_compression(png::Compression::High);
+    // Palette indices are not a continuous signal; delta filters only add noise.
+    encoder.set_filter(png::Filter::NoFilter);
+    encoder.set_palette(palette.colors.iter().flat_map(|c| [c[0], c[1], c[2]]).collect::<Vec<u8>>());
+    if palette.colors.iter().any(|c| c[3] != 255) {
+        encoder.set_trns(palette.colors.iter().map(|c| c[3]).collect::<Vec<u8>>());
+    }
+    encoder
+        .write_header()
+        .and_then(|mut w| w.write_image_data(&data))
+        .map_err(|e| format!("Failed to encode PNG: {}", e))?;
+    Ok(buf)
 }
 
 fn encode_jpeg(img: &DynamicImage, profile: Option<&JpegProfile>) -> Result<Vec<u8>, String> {
@@ -206,7 +310,7 @@ mod tests {
             (OutputFormat::Jpeg, ImageFormat::Jpeg),
             (OutputFormat::WebpLossless, ImageFormat::WebP),
         ] {
-            let bytes = encode(&img, fmt, None).unwrap();
+            let bytes = encode(&img, fmt, &SourceHints::default()).unwrap();
             assert_eq!(image::guess_format(&bytes).unwrap(), expected);
         }
     }
@@ -243,7 +347,8 @@ mod tests {
         let src = source_jpeg(&img);
         let profile = read_jpeg_profile(&src).unwrap();
         let decoded = image::load_from_memory(&src).unwrap();
-        let out = encode(&decoded, OutputFormat::Jpeg, Some(&profile)).unwrap();
+        let hints = SourceHints { jpeg: Some(profile.clone()), ..Default::default() };
+        let out = encode(&decoded, OutputFormat::Jpeg, &hints).unwrap();
         assert_eq!(read_jpeg_profile(&out).unwrap(), profile);
         assert!(
             out.len() <= src.len() * 105 / 100,
@@ -256,14 +361,60 @@ mod tests {
     #[test]
     fn jpeg_without_source_profile_uses_420_subsampling() {
         let img = DynamicImage::ImageRgb8(textured(64, 48));
-        let out = encode(&img, OutputFormat::Jpeg, None).unwrap();
+        let out = encode(&img, OutputFormat::Jpeg, &SourceHints::default()).unwrap();
         assert_eq!(read_jpeg_profile(&out).unwrap().sampling, (2, 2));
     }
 
     #[test]
     fn non_jpeg_bytes_have_no_profile() {
         let img = DynamicImage::ImageRgb8(textured(8, 8));
-        assert!(read_jpeg_profile(&encode(&img, OutputFormat::Png, None).unwrap()).is_none());
+        assert!(read_jpeg_profile(&encode(&img, OutputFormat::Png, &SourceHints::default()).unwrap()).is_none());
+    }
+
+    /// Indexed PNG with a 16-colour palette, like many AI or web images.
+    fn palette_png(w: u32, h: u32) -> Vec<u8> {
+        let palette: Vec<u8> = (0..16u8).flat_map(|i| [i * 16, 255 - i * 16, i.wrapping_mul(37)]).collect();
+        let data: Vec<u8> = (0..h).flat_map(|y| (0..w).map(move |x| ((x / 4 + y / 4) % 16) as u8)).collect();
+        let mut out = Vec::new();
+        let mut enc = png::Encoder::new(&mut out, w, h);
+        enc.set_color(png::ColorType::Indexed);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.set_palette(palette);
+        enc.write_header().unwrap().write_image_data(&data).unwrap();
+        out
+    }
+
+    fn png_color_type(bytes: &[u8]) -> u8 {
+        bytes[25] // IHDR colour type
+    }
+
+    #[test]
+    fn reads_palette_from_indexed_png() {
+        let hints = read_source_hints(&palette_png(32, 32));
+        assert_eq!(hints.png_palette.expect("palette").colors.len(), 16);
+        assert!(hints.jpeg.is_none());
+    }
+
+    #[test]
+    fn indexed_source_is_written_back_indexed_and_lossless() {
+        let src = palette_png(256, 256);
+        let hints = read_source_hints(&src);
+        let decoded = image::load_from_memory(&src).unwrap();
+        let out = encode(&decoded, OutputFormat::Png, &hints).unwrap();
+        assert_eq!(png_color_type(&out), 3, "expected an indexed PNG");
+        assert_eq!(image::load_from_memory(&out).unwrap().to_rgba8(), decoded.to_rgba8());
+        assert!(out.len() <= src.len() * 11 / 10, "{} bytes vs source {}", out.len(), src.len());
+    }
+
+    #[test]
+    fn off_palette_pixel_maps_to_nearest_entry() {
+        let src = palette_png(8, 8);
+        let hints = read_source_hints(&src);
+        let mut img = image::load_from_memory(&src).unwrap().to_rgba8();
+        let target = *img.get_pixel(0, 0);
+        img.put_pixel(1, 1, image::Rgba([target[0] + 3, target[1].saturating_sub(2), target[2], 255]));
+        let out = encode(&DynamicImage::ImageRgba8(img), OutputFormat::Png, &hints).unwrap();
+        assert_eq!(image::load_from_memory(&out).unwrap().to_rgba8().get_pixel(1, 1), &target);
     }
 
     #[test]

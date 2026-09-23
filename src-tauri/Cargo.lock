@@ -5251,6 +5251,7 @@ dependencies = [
  "image",
  "imageproc",
  "jpeg-encoder",
+ "png 0.18.0",
  "serde",
  "serde_json",
  "tauri",

@@ -65,9 +65,10 @@ pub async fn remove_watermark(
         .unwrap_or("png")
         .to_string();
     let format = codec::output_format(&original_extension, options.lossless);
-    // Reuse the source JPEG's tables and subsampling so the file doesn't grow.
-    let source_profile = fs::read(&image_path).ok().and_then(|b| codec::read_jpeg_profile(&b));
-    let final_bytes = codec::encode(&output.image, format, source_profile.as_ref())?;
+    // Store the result the way the source was stored (JPEG tables, PNG palette)
+    // so the file doesn't grow.
+    let hints = fs::read(&image_path).map(|b| codec::read_source_hints(&b)).unwrap_or_default();
+    let final_bytes = codec::encode(&output.image, format, &hints)?;
     let processed_size = final_bytes.len() as u64;
 
     let output_filename = format!(
