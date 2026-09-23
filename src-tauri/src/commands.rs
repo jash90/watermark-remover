@@ -158,10 +158,11 @@ pub async fn save_processed_image(source_path: String, destination_path: String)
 pub async fn cleanup_temp_files() -> Result<(), String> {
     let temp_dir = get_temp_dir()?;
     if temp_dir.exists() {
-        for entry in fs::read_dir(&temp_dir).map_err(|e| format!("Failed to read temp dir: {}", e))? {
-            if let Ok(entry) = entry {
-                let _ = fs::remove_file(entry.path());
-            }
+        for entry in fs::read_dir(&temp_dir)
+            .map_err(|e| format!("Failed to read temp dir: {}", e))?
+            .flatten()
+        {
+            let _ = fs::remove_file(entry.path());
         }
     }
     Ok(())

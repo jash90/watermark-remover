@@ -5,8 +5,12 @@ export interface WatermarkRegion {
   height: number;
 }
 
+export type EngineKind = 'telea' | 'gemini';
+
 export interface RemovalOptions {
   lossless: boolean;
+  engine: EngineKind;
+  refine_mask: boolean;
 }
 
 export interface ProcessResult {

@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { ImageDropZone } from './components/ImageDropZone';
 import { RegionSelector } from './components/RegionSelector';
@@ -7,13 +8,15 @@ import { OptionsPanel } from './components/OptionsPanel';
 import { SettingsModal } from './components/SettingsModal';
 import { BatchQueuePanel } from './components/BatchQueuePanel';
 import { useWatermarkRemoval } from './hooks/useWatermarkRemoval';
-import type { WatermarkRegion, RemovalOptions, ImageInfo, BatchFile, BatchProgress } from './types/watermark';
+import type { WatermarkRegion, RemovalOptions, ImageInfo, BatchFile, BatchProgress, ProcessResult } from './types/watermark';
 import './App.css';
 
 type AppStage = 'upload' | 'select' | 'preview' | 'batch-select' | 'batch-processing' | 'batch-results';
 
 const DEFAULT_OPTIONS: RemovalOptions = {
   lossless: false,
+  engine: 'telea',
+  refine_mask: true,
 };
 
 function App() {
@@ -45,6 +48,8 @@ function App() {
     checkApiKey,
     clearError,
   } = useWatermarkRemoval();
+
+  const needsApiKey = options.engine === 'gemini' && !hasApiKey;
 
   // Refresh API key status when settings modal closes
   const handleSettingsClose = useCallback(() => {
@@ -138,18 +143,12 @@ function App() {
       handleBatchFileUpdate(file.id, { status: 'processing' });
 
       try {
-        const result = await removeWatermark(file.path, selectedRegion, options);
-        if (result) {
-          handleBatchFileUpdate(file.id, {
-            status: 'completed',
-            processedPath: result.output_path,
-          });
-        } else {
-          handleBatchFileUpdate(file.id, {
-            status: 'failed',
-            error: error || 'Processing failed',
-          });
-        }
+        const result = await invoke<ProcessResult>('remove_watermark', {
+          imagePath: file.path,
+          region: selectedRegion,
+          options,
+        });
+        handleBatchFileUpdate(file.id, { status: 'completed', processedPath: result.output_path });
       } catch (err) {
         handleBatchFileUpdate(file.id, {
           status: 'failed',
@@ -160,7 +159,7 @@ function App() {
 
     setBatchProgress(null);
     setStage('batch-results');
-  }, [selectedRegion, batchFiles, options, removeWatermark, handleBatchFileUpdate, error]);
+  }, [selectedRegion, batchFiles, options, handleBatchFileUpdate]);
 
   // Handler for saving all batch results
   const handleSaveBatch = useCallback(async () => {
@@ -360,7 +359,7 @@ function App() {
                 <button
                   className="btn btn-primary btn-large"
                   onClick={handleRemoveWatermark}
-                  disabled={!selectedRegion || isProcessing || !hasApiKey}
+                  disabled={!selectedRegion || isProcessing || needsApiKey}
                 >
                   {isProcessing ? (
                     <>
@@ -416,7 +415,7 @@ function App() {
                 <button
                   className="btn btn-primary btn-large"
                   onClick={handleProcessBatch}
-                  disabled={!selectedRegion || isProcessing || batchFiles.length === 0 || !hasApiKey}
+                  disabled={!selectedRegion || isProcessing || batchFiles.length === 0 || needsApiKey}
                 >
                   Process All ({batchFiles.length} files)
                 </button>
