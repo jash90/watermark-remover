@@ -14,10 +14,12 @@ pub fn clamp_region(r: &WatermarkRegion, img_w: u32, img_h: u32) -> Result<Rect,
     if r.width <= 0 || r.height <= 0 {
         return Err("Region must have a positive size".to_string());
     }
-    let x0 = r.x.max(0) as u32;
-    let y0 = r.y.max(0) as u32;
-    let x1 = ((r.x + r.width).max(0) as u32).min(img_w);
-    let y1 = ((r.y + r.height).max(0) as u32).min(img_h);
+    // i64 so that x + width can't overflow for any i32 input.
+    let clamp_x = |v: i64| v.clamp(0, img_w as i64) as u32;
+    let clamp_y = |v: i64| v.clamp(0, img_h as i64) as u32;
+    let (x0, y0) = (clamp_x(r.x as i64), clamp_y(r.y as i64));
+    let x1 = clamp_x(r.x as i64 + r.width as i64);
+    let y1 = clamp_y(r.y as i64 + r.height as i64);
     if x0 >= x1 || y0 >= y1 {
         return Err(format!("Region lies outside the {}x{} image", img_w, img_h));
     }
@@ -66,6 +68,17 @@ mod tests {
     #[test]
     fn rejects_empty_region() {
         assert!(clamp_region(&region(10, 10, 0, 5), 100, 50).is_err());
+    }
+
+    #[test]
+    fn clamps_region_with_huge_width() {
+        let r = clamp_region(&region(10, 10, i32::MAX, i32::MAX), 100, 50).unwrap();
+        assert_eq!(r, Rect { x: 10, y: 10, w: 90, h: 40 });
+    }
+
+    #[test]
+    fn rejects_region_starting_at_i32_max() {
+        assert!(clamp_region(&region(i32::MAX, 0, i32::MAX, 5), 100, 50).is_err());
     }
 
     #[test]
