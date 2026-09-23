@@ -27,6 +27,9 @@
   },
   "bundle": {
     "active": true,
+    "resources": {
+      "resources/models/realesr-general-x4v3.onnx": "models/realesr-general-x4v3.onnx"
+    },
     "targets": "all",
     "icon": [
       "icons/32x32.png",

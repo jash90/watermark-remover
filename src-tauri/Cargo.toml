@@ -27,6 +27,8 @@ tempfile = "3"
 jpeg-encoder = "0.7"
 png = "0.18"
 num-traits = "0.2"
+sha2 = "0.10"
+ureq = "3"
 
 # ONNX Runtime everywhere it ships binaries (not Intel macOS).
 [target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]

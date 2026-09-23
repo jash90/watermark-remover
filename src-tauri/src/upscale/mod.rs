@@ -1,3 +1,4 @@
+pub mod models;
 pub mod tiling;
 #[cfg(ai_upscale)]
 pub mod onnx;
