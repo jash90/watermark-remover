@@ -1,5 +1,4 @@
-use crate::gemini_client::GeminiClient;
-use crate::image_processor::{self, EngineKind, RemovalOptions, WatermarkRegion};
+use crate::image_processor::{self, RemovalOptions, WatermarkRegion};
 use crate::removal::codec;
 use crate::removal::engine::Engine;
 use crate::removal::pipeline::{self, PipelineOptions};
@@ -7,7 +6,6 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use tauri_plugin_store::StoreExt;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -44,25 +42,8 @@ fn chrono_lite_timestamp() -> u64 {
         .unwrap_or(0)
 }
 
-const STORE_FILENAME: &str = "settings.json";
-const API_KEY_SETTING: &str = "gemini_api_key";
-
-fn get_stored_api_key(app: &tauri::AppHandle) -> Result<String, String> {
-    let store = app
-        .store(STORE_FILENAME)
-        .map_err(|e| format!("Failed to access store: {}", e))?;
-
-    let api_key = store
-        .get(API_KEY_SETTING)
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_default();
-
-    Ok(api_key)
-}
-
 #[tauri::command]
 pub async fn remove_watermark(
-    app: tauri::AppHandle,
     image_path: String,
     region: WatermarkRegion,
     options: Option<RemovalOptions>,
@@ -72,16 +53,7 @@ pub async fn remove_watermark(
         .map_err(|e| format!("Failed to get original file size: {}", e))?
         .len();
 
-    let engine = match options.engine {
-        EngineKind::Telea => Engine::Telea { radius: 5 },
-        EngineKind::Gemini => {
-            let api_key = get_stored_api_key(&app)?;
-            if api_key.is_empty() {
-                return Err("Gemini API key not configured. Please set it in Settings.".to_string());
-            }
-            Engine::Gemini(GeminiClient::new(api_key))
-        }
-    };
+    let engine = Engine::Telea { radius: 5 };
 
     let original = codec::load_oriented(&image_path)?;
     let pipeline_options = PipelineOptions { refine_mask: options.refine_mask, grow: 2, feather: 3 };
@@ -93,7 +65,9 @@ pub async fn remove_watermark(
         .unwrap_or("png")
         .to_string();
     let format = codec::output_format(&original_extension, options.lossless);
-    let final_bytes = codec::encode(&output.image, format)?;
+    // Reuse the source JPEG's tables and subsampling so the file doesn't grow.
+    let source_profile = fs::read(&image_path).ok().and_then(|b| codec::read_jpeg_profile(&b));
+    let final_bytes = codec::encode(&output.image, format, source_profile.as_ref())?;
     let processed_size = final_bytes.len() as u64;
 
     let output_filename = format!(
@@ -166,49 +140,4 @@ pub async fn cleanup_temp_files() -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-#[tauri::command]
-pub async fn set_gemini_api_key(app: tauri::AppHandle, api_key: String) -> Result<(), String> {
-    let store = app
-        .store(STORE_FILENAME)
-        .map_err(|e| format!("Failed to access store: {}", e))?;
-
-    store
-        .set(API_KEY_SETTING, serde_json::json!(api_key));
-
-    store
-        .save()
-        .map_err(|e| format!("Failed to save store: {}", e))?;
-
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn get_gemini_api_key(app: tauri::AppHandle) -> Result<String, String> {
-    get_stored_api_key(&app)
-}
-
-#[tauri::command]
-pub async fn test_gemini_connection(app: tauri::AppHandle) -> Result<bool, String> {
-    let api_key = get_stored_api_key(&app)?;
-
-    if api_key.is_empty() {
-        return Err("API key not configured".to_string());
-    }
-
-    let client = GeminiClient::new(api_key);
-    client.test_connection().await
-}
-
-#[tauri::command]
-pub async fn list_gemini_models(app: tauri::AppHandle) -> Result<Vec<String>, String> {
-    let api_key = get_stored_api_key(&app)?;
-
-    if api_key.is_empty() {
-        return Err("API key not configured".to_string());
-    }
-
-    let client = GeminiClient::new(api_key);
-    client.list_models().await
 }
