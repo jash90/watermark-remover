@@ -1,5 +1,6 @@
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-use image::{DynamicImage, ImageEncoder, ImageFormat, ImageReader};
+use image::codecs::webp::WebPEncoder;
+use image::{DynamicImage, ImageEncoder, ImageReader};
 use jpeg_encoder::{ColorType, QuantizationTableType, SamplingFactor};
 use std::collections::HashMap;
 use std::io::Cursor;
@@ -150,10 +151,21 @@ pub struct PngPalette {
 pub struct SourceHints {
     pub jpeg: Option<JpegProfile>,
     pub png_palette: Option<PngPalette>,
+    /// Colour profile (e.g. Display P3); without it colours shift in managed viewers.
+    pub icc_profile: Option<Vec<u8>>,
 }
 
 pub fn read_source_hints(bytes: &[u8]) -> SourceHints {
-    SourceHints { jpeg: read_jpeg_profile(bytes), png_palette: read_png_palette(bytes) }
+    SourceHints {
+        jpeg: read_jpeg_profile(bytes),
+        png_palette: read_png_palette(bytes),
+        icc_profile: read_icc_profile(bytes),
+    }
+}
+
+fn read_icc_profile(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut decoder = ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?.into_decoder().ok()?;
+    image::ImageDecoder::icc_profile(&mut decoder).ok().flatten()
 }
 
 fn read_png_palette(bytes: &[u8]) -> Option<PngPalette> {
@@ -195,28 +207,39 @@ fn read_png_palette(bytes: &[u8]) -> Option<PngPalette> {
 /// source's palette. This keeps the output about the size of the input.
 pub fn encode(img: &DynamicImage, format: OutputFormat, hints: &SourceHints) -> Result<Vec<u8>, String> {
     match format {
-        OutputFormat::Jpeg => encode_jpeg(img, hints.jpeg.as_ref()),
-        OutputFormat::Png if hints.png_palette.is_some() => {
-            encode_indexed_png(img, hints.png_palette.as_ref().expect("checked above"))
-        }
+        OutputFormat::Jpeg => encode_jpeg(img, hints.jpeg.as_ref(), hints.icc_profile.as_deref()),
+        OutputFormat::Png if hints.png_palette.is_some() => encode_indexed_png(
+            img,
+            hints.png_palette.as_ref().expect("checked above"),
+            hints.icc_profile.as_deref(),
+        ),
         OutputFormat::Png => {
             let mut buf = Vec::new();
-            PngEncoder::new_with_quality(&mut buf, CompressionType::Best, FilterType::Adaptive)
+            let mut encoder = PngEncoder::new_with_quality(&mut buf, CompressionType::Best, FilterType::Adaptive);
+            if let Some(icc) = &hints.icc_profile {
+                encoder.set_icc_profile(icc.clone()).map_err(|e| format!("Failed to embed colour profile: {}", e))?;
+            }
+            encoder
                 .write_image(img.as_bytes(), img.width(), img.height(), img.color().into())
                 .map_err(|e| format!("Failed to encode PNG: {}", e))?;
             Ok(buf)
         }
         OutputFormat::WebpLossless => {
-            let mut buf = Cursor::new(Vec::new());
-            DynamicImage::ImageRgba8(img.to_rgba8())
-                .write_to(&mut buf, ImageFormat::WebP)
+            let mut buf = Vec::new();
+            let rgba = img.to_rgba8();
+            let mut encoder = WebPEncoder::new_lossless(&mut buf);
+            if let Some(icc) = &hints.icc_profile {
+                encoder.set_icc_profile(icc.clone()).map_err(|e| format!("Failed to embed colour profile: {}", e))?;
+            }
+            encoder
+                .write_image(rgba.as_raw(), rgba.width(), rgba.height(), image::ExtendedColorType::Rgba8)
                 .map_err(|e| format!("Failed to encode WebP: {}", e))?;
-            Ok(buf.into_inner())
+            Ok(buf)
         }
     }
 }
 
-fn encode_indexed_png(img: &DynamicImage, palette: &PngPalette) -> Result<Vec<u8>, String> {
+fn encode_indexed_png(img: &DynamicImage, palette: &PngPalette, icc: Option<&[u8]>) -> Result<Vec<u8>, String> {
     let rgba = img.to_rgba8();
     let mut lookup: HashMap<[u8; 4], u8> = HashMap::new();
     for (k, c) in palette.colors.iter().enumerate().rev() {
@@ -246,7 +269,9 @@ fn encode_indexed_png(img: &DynamicImage, palette: &PngPalette) -> Result<Vec<u8
         _ => png::BitDepth::Eight,
     };
     let mut buf = Vec::new();
-    let mut encoder = png::Encoder::new(&mut buf, rgba.width(), rgba.height());
+    let mut info = png::Info::with_size(rgba.width(), rgba.height());
+    info.icc_profile = icc.map(|p| std::borrow::Cow::Owned(p.to_vec()));
+    let mut encoder = png::Encoder::with_info(&mut buf, info).map_err(|e| format!("Failed to encode PNG: {}", e))?;
     encoder.set_color(png::ColorType::Indexed);
     encoder.set_depth(bit_depth);
     encoder.set_compression(png::Compression::High);
@@ -263,7 +288,7 @@ fn encode_indexed_png(img: &DynamicImage, palette: &PngPalette) -> Result<Vec<u8
     Ok(buf)
 }
 
-fn encode_jpeg(img: &DynamicImage, profile: Option<&JpegProfile>) -> Result<Vec<u8>, String> {
+fn encode_jpeg(img: &DynamicImage, profile: Option<&JpegProfile>, icc: Option<&[u8]>) -> Result<Vec<u8>, String> {
     let rgb = img.to_rgb8();
     let (w, h) = (
         u16::try_from(rgb.width()).map_err(|_| "Image is too wide for JPEG".to_string())?,
@@ -281,6 +306,9 @@ fn encode_jpeg(img: &DynamicImage, profile: Option<&JpegProfile>) -> Result<Vec<
             QuantizationTableType::Custom(Box::new(p.chroma)),
         );
     }
+    if let Some(icc) = icc {
+        encoder.add_icc_profile(icc).map_err(|e| format!("Failed to embed colour profile: {}", e))?;
+    }
     encoder
         .encode(rgb.as_raw(), w, h, ColorType::Rgb)
         .map_err(|e| format!("Failed to encode JPEG: {}", e))?;
@@ -291,6 +319,7 @@ fn encode_jpeg(img: &DynamicImage, profile: Option<&JpegProfile>) -> Result<Vec<
 mod tests {
     use super::*;
     use image::codecs::jpeg::JpegEncoder;
+    use image::ImageFormat;
     use image::{GenericImageView, Rgb, RgbImage};
 
     #[test]
@@ -415,6 +444,37 @@ mod tests {
         img.put_pixel(1, 1, image::Rgba([target[0] + 3, target[1].saturating_sub(2), target[2], 255]));
         let out = encode(&DynamicImage::ImageRgba8(img), OutputFormat::Png, &hints).unwrap();
         assert_eq!(image::load_from_memory(&out).unwrap().to_rgba8().get_pixel(1, 1), &target);
+    }
+
+    fn fake_icc() -> Vec<u8> {
+        (0..300u32).map(|i| (i * 7 % 251) as u8).collect()
+    }
+
+    #[test]
+    fn icc_profile_survives_jpeg_reencode() {
+        let img = textured(64, 48);
+        let mut src = Vec::new();
+        let mut enc = jpeg_encoder::Encoder::new(&mut src, 85);
+        enc.add_icc_profile(&fake_icc()).unwrap();
+        enc.encode(img.as_raw(), 64, 48, jpeg_encoder::ColorType::Rgb).unwrap();
+        let hints = read_source_hints(&src);
+        assert_eq!(hints.icc_profile.as_deref(), Some(fake_icc().as_slice()));
+        let out = encode(&image::load_from_memory(&src).unwrap(), OutputFormat::Jpeg, &hints).unwrap();
+        assert_eq!(read_source_hints(&out).icc_profile, Some(fake_icc()));
+    }
+
+    #[test]
+    fn icc_profile_survives_png_reencode_truecolour_and_indexed() {
+        let truecolour = DynamicImage::ImageRgb8(textured(16, 16));
+        let hints = SourceHints { icc_profile: Some(fake_icc()), ..Default::default() };
+        let out = encode(&truecolour, OutputFormat::Png, &hints).unwrap();
+        assert_eq!(read_source_hints(&out).icc_profile, Some(fake_icc()));
+
+        let indexed_src = palette_png(16, 16);
+        let mut hints = read_source_hints(&indexed_src);
+        hints.icc_profile = Some(fake_icc());
+        let out = encode(&image::load_from_memory(&indexed_src).unwrap(), OutputFormat::Png, &hints).unwrap();
+        assert_eq!(read_source_hints(&out).icc_profile, Some(fake_icc()));
     }
 
     #[test]
