@@ -245,7 +245,8 @@ pub fn encode(img: &DynamicImage, format: OutputFormat, hints: &SourceHints) -> 
         ),
         OutputFormat::Png => {
             let mut buf = Vec::new();
-            let mut encoder = PngEncoder::new_with_quality(&mut buf, CompressionType::Best, FilterType::Adaptive);
+            let mut encoder =
+                PngEncoder::new_with_quality(&mut buf, png_compression(img.width(), img.height()), FilterType::Adaptive);
             if let Some(icc) = &hints.icc_profile {
                 encoder.set_icc_profile(icc.clone()).map_err(|e| format!("Failed to embed colour profile: {}", e))?;
             }
@@ -266,6 +267,16 @@ pub fn encode(img: &DynamicImage, format: OutputFormat, hints: &SourceHints) -> 
                 .map_err(|e| format!("Failed to encode WebP: {}", e))?;
             Ok(buf)
         }
+    }
+}
+
+/// "Best" deflate is ~3.6x slower than "Default" for ~3 % smaller files; above 16 MP
+/// (typical for upscales: 4096² took 16 s vs 4.4 s) use "Default".
+fn png_compression(width: u32, height: u32) -> CompressionType {
+    if width as u64 * height as u64 > 16_000_000 {
+        CompressionType::Default
+    } else {
+        CompressionType::Best
     }
 }
 
@@ -588,6 +599,12 @@ mod tests {
         use base64::{engine::general_purpose::STANDARD, Engine as _};
         let decoded = image::load_from_memory(&STANDARD.decode(b64).unwrap()).unwrap();
         assert_eq!(decoded.width(), 2048);
+    }
+
+    #[test]
+    fn png_compression_trades_size_for_speed_on_huge_images() {
+        assert!(matches!(png_compression(4000, 4000), CompressionType::Best));
+        assert!(matches!(png_compression(4097, 4096), CompressionType::Default));
     }
 
     #[test]
