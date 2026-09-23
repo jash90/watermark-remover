@@ -8,6 +8,8 @@ const BAND: u8 = 1;
 const INSIDE: u8 = 2;
 /// Not a source and not filled (e.g. fully transparent pixels).
 const IGNORED: u8 = 3;
+const SURROUNDED_BY_TRANSPARENT: &str =
+    "The selected area is surrounded by transparent pixels, so there is nothing to fill it from";
 const INF: f32 = 1.0e6;
 const NEIGHBOURS: [(i64, i64); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
 
@@ -96,7 +98,11 @@ pub fn inpaint_with_ignore(
         }
     }
     if !g.flags.contains(&KNOWN) {
-        return Err("Nothing to inpaint from: the mask covers the whole area".to_string());
+        return Err(if ignore.is_some() {
+            SURROUNDED_BY_TRANSPARENT.to_string()
+        } else {
+            "Nothing to inpaint from: the mask covers the whole area".to_string()
+        });
     }
 
     let mut px: Vec<[f32; 3]> = img.pixels().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
@@ -132,6 +138,12 @@ pub fn inpaint_with_ignore(
             px[j] = fill_pixel(&g, &px, nx, ny, r);
             heap.push(Reverse((g.t[j].to_bits(), j)));
         }
+    }
+
+    // Hole pixels the front never reached are cut off from every source by
+    // ignored (transparent) pixels; returning them unchanged would look like success.
+    if g.flags.contains(&INSIDE) {
+        return Err(SURROUNDED_BY_TRANSPARENT.to_string());
     }
 
     Ok(RgbImage::from_fn(w, h, |x, y| {
@@ -275,6 +287,18 @@ mod tests {
         let ignore = GrayImage::from_pixel(12, 12, Luma([HOLE]));
         // Nothing known anywhere → error, not a panic.
         assert!(inpaint_with_ignore(&img, &mask, Some(&ignore), 5).is_err());
+    }
+
+    #[test]
+    fn hole_walled_off_by_transparent_ring_is_an_error_not_a_silent_no_op() {
+        // Opaque 10x10 logo (the hole) inside a transparent ring, opaque background outside.
+        let img = RgbImage::from_pixel(30, 30, Rgb([40, 90, 140]));
+        let inner = |x: u32, y: u32| (10..20).contains(&x) && (10..20).contains(&y);
+        let ring = |x: u32, y: u32| (6..24).contains(&x) && (6..24).contains(&y) && !inner(x, y);
+        let mask = GrayImage::from_fn(30, 30, |x, y| Luma([if inner(x, y) { HOLE } else { 0 }]));
+        let ignore = GrayImage::from_fn(30, 30, |x, y| Luma([if ring(x, y) { HOLE } else { 0 }]));
+        let err = inpaint_with_ignore(&img, &mask, Some(&ignore), 5).unwrap_err();
+        assert!(err.contains("surrounded by transparent"), "{err}");
     }
 
     #[test]
