@@ -6,8 +6,19 @@ import { RegionSelector } from './components/RegionSelector';
 import { PreviewPanel } from './components/PreviewPanel';
 import { OptionsPanel } from './components/OptionsPanel';
 import { BatchQueuePanel } from './components/BatchQueuePanel';
+import { UpscalePanel } from './components/UpscalePanel';
 import { useWatermarkRemoval } from './hooks/useWatermarkRemoval';
-import type { WatermarkRegion, RemovalOptions, ImageInfo, BatchFile, BatchProgress, ProcessResult } from './types/watermark';
+import { useUpscale } from './hooks/useUpscale';
+import type {
+  WatermarkRegion,
+  RemovalOptions,
+  ImageInfo,
+  BatchFile,
+  BatchProgress,
+  ProcessResult,
+  UpscaleModel,
+  UpscaleScale,
+} from './types/watermark';
 import './App.css';
 
 type AppStage = 'upload' | 'select' | 'preview' | 'batch-select' | 'batch-processing' | 'batch-results';
@@ -28,6 +39,9 @@ function App() {
   const [processedPath, setProcessedPath] = useState<string | null>(null);
   const [originalSize, setOriginalSize] = useState<number | null>(null);
   const [processedSize, setProcessedSize] = useState<number | null>(null);
+  // What the current result is, for the save name and the upscale panel's size preview.
+  const [lastAction, setLastAction] = useState<'remove' | 'upscale'>('remove');
+  const [resultDims, setResultDims] = useState<{ width: number; height: number } | null>(null);
 
   // Batch processing state
   const [batchFiles, setBatchFiles] = useState<BatchFile[]>([]);
@@ -43,6 +57,7 @@ function App() {
     cleanupTempFiles,
     clearError,
   } = useWatermarkRemoval();
+  const upscaler = useUpscale();
 
   // Cleanup temp files on unmount
   useEffect(() => {
@@ -197,9 +212,29 @@ function App() {
       setProcessedPath(result.output_path);
       setOriginalSize(result.original_size);
       setProcessedSize(result.processed_size);
+      setLastAction('remove');
+      setResultDims(imageInfo ? { width: imageInfo.width, height: imageInfo.height } : null);
       setStage('preview');
     }
-  }, [imagePath, selectedRegion, options, removeWatermark]);
+  }, [imagePath, selectedRegion, options, removeWatermark, imageInfo]);
+
+  // Upscales the current result if there is one, otherwise the original image.
+  const handleUpscale = useCallback(async (scale: UpscaleScale, model: UpscaleModel) => {
+    const source = processedPath ?? imagePath;
+    const dims = processedPath ? resultDims : imageInfo;
+    if (!source || !dims) return;
+    const result = await upscaler.upscale(source, scale, model, options.lossless);
+    if (result && result.base64_preview) {
+      const factor = { x2: 2, x4: 4, x8: 8 }[scale];
+      setProcessedImage(result.base64_preview);
+      setProcessedPath(result.output_path);
+      setOriginalSize(result.original_size);
+      setProcessedSize(result.processed_size);
+      setLastAction('upscale');
+      setResultDims({ width: dims.width * factor, height: dims.height * factor });
+      setStage('preview');
+    }
+  }, [processedPath, imagePath, resultDims, imageInfo, upscaler, options.lossless]);
 
   const handleSave = useCallback(async () => {
     if (!processedPath || !imagePath) return;
@@ -212,7 +247,8 @@ function App() {
     const originalFilename = pathParts[pathParts.length - 1];
     const nameWithoutExt = originalFilename.replace(/\.[^/.]+$/, '');
 
-    const defaultName = `${nameWithoutExt}_watermark.${extension}`;
+    const suffix = lastAction === 'upscale' ? 'upscaled' : 'watermark';
+    const defaultName = `${nameWithoutExt}_${suffix}.${extension}`;
 
     const destination = await save({
       filters: [
@@ -227,7 +263,7 @@ function App() {
     if (destination) {
       await saveProcessedImage(processedPath, destination);
     }
-  }, [processedPath, imagePath, saveProcessedImage]);
+  }, [processedPath, imagePath, saveProcessedImage, lastAction]);
 
   const handleReset = useCallback(() => {
     setStage('upload');
@@ -239,6 +275,8 @@ function App() {
     setProcessedPath(null);
     setOriginalSize(null);
     setProcessedSize(null);
+    setResultDims(null);
+    setLastAction('remove');
     setOptions(DEFAULT_OPTIONS);
     setBatchFiles([]);
     setBatchProgress(null);
@@ -282,10 +320,10 @@ function App() {
       </header>
 
       <main className="app-main">
-        {error && (
+        {(error || upscaler.error) && (
           <div className="error-banner">
-            <span>{error}</span>
-            <button onClick={clearError}>&times;</button>
+            <span>{error ?? upscaler.error}</span>
+            <button onClick={() => { clearError(); upscaler.clearError(); }}>&times;</button>
           </div>
         )}
 
@@ -336,6 +374,16 @@ function App() {
                     'Remove Watermark'
                   )}
                 </button>
+                <UpscalePanel
+                  width={imageInfo.width}
+                  height={imageInfo.height}
+                  ai={upscaler.ai}
+                  busy={upscaler.busy}
+                  progress={upscaler.progress}
+                  download={upscaler.download}
+                  onUpscale={handleUpscale}
+                  onCancel={upscaler.cancel}
+                />
               </div>
             </div>
           </div>
@@ -468,6 +516,18 @@ function App() {
                 Save Result
               </button>
             </div>
+            {resultDims && (
+              <UpscalePanel
+                width={resultDims.width}
+                height={resultDims.height}
+                ai={upscaler.ai}
+                busy={upscaler.busy}
+                progress={upscaler.progress}
+                download={upscaler.download}
+                onUpscale={handleUpscale}
+                onCancel={upscaler.cancel}
+              />
+            )}
           </div>
         )}
       </main>

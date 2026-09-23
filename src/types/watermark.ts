@@ -57,3 +57,13 @@ export interface BatchProgress {
   totalFiles: number;
   currentFilename: string;
 }
+
+export type UpscaleScale = 'x2' | 'x4' | 'x8';
+export type UpscaleModel = 'fast' | 'quality';
+
+export interface UpscaleProgress {
+  pass: number;
+  passes: number;
+  done: number;
+  total: number;
+}
