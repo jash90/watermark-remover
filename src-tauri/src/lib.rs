@@ -1,6 +1,7 @@
 mod commands;
-mod gemini_client;
-mod image_processor;
+pub mod gemini_client;
+pub mod image_processor;
+pub mod removal;
 
 use commands::{
     // Image commands
