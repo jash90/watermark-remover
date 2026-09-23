@@ -53,22 +53,26 @@ pub async fn remove_watermark(
         .map_err(|e| format!("Failed to get original file size: {}", e))?
         .len();
 
-    let engine = Engine::Telea { radius: 5 };
+    // Decoding, inpainting and encoding are CPU-heavy: keep them off the async runtime.
+    let path = image_path.clone();
+    let (final_bytes, format) = tauri::async_runtime::spawn_blocking(move || {
+        let original = codec::load_oriented(&path)?;
+        let pipeline_options = PipelineOptions { refine_mask: options.refine_mask, grow: 2, feather: 3 };
+        let output = pipeline::run(&original, &region, &pipeline_options, &Engine::Telea { radius: 5 })?;
 
-    let original = codec::load_oriented(&image_path)?;
-    let pipeline_options = PipelineOptions { refine_mask: options.refine_mask, grow: 2, feather: 3 };
-    let output = pipeline::run(&original, &region, &pipeline_options, &engine).await?;
-
-    let original_extension = PathBuf::from(&image_path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("png")
-        .to_string();
-    let format = codec::output_format(&original_extension, options.lossless);
-    // Store the result the way the source was stored (JPEG tables, PNG palette)
-    // so the file doesn't grow.
-    let hints = fs::read(&image_path).map(|b| codec::read_source_hints(&b)).unwrap_or_default();
-    let final_bytes = codec::encode(&output.image, format, &hints)?;
+        let original_extension = PathBuf::from(&path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("png")
+            .to_string();
+        let format = codec::output_format(&original_extension, options.lossless);
+        // Store the result the way the source was stored (JPEG tables, PNG palette,
+        // colour profile) so the file doesn't grow and colours don't shift.
+        let hints = fs::read(&path).map(|b| codec::read_source_hints(&b)).unwrap_or_default();
+        Ok::<_, String>((codec::encode(&output.image, format, &hints)?, format))
+    })
+    .await
+    .map_err(|e| format!("Processing task failed: {}", e))??;
     let processed_size = final_bytes.len() as u64;
 
     let output_filename = format!(

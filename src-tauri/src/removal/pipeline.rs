@@ -21,7 +21,8 @@ pub struct PipelineOutput {
 }
 
 /// Backend-independent removal: mask → crop → engine → composite onto the original.
-pub async fn run(
+/// CPU-bound; run it via `spawn_blocking` from async code.
+pub fn run(
     original: &DynamicImage,
     region: &WatermarkRegion,
     opts: &PipelineOptions,
@@ -41,7 +42,7 @@ pub async fn run(
         (dilate(&rect, opts.grow), false)
     };
 
-    let patch = engine.inpaint(crop_img, mask.clone()).await?;
+    let patch = engine.inpaint(&crop_img, &mask)?;
     let patch = if patch.dimensions() == (crop.w, crop.h) {
         patch
     } else {
@@ -76,10 +77,10 @@ mod tests {
         WatermarkRegion { x, y, width, height }
     }
 
-    #[tokio::test]
-    async fn pipeline_keeps_size_and_untouched_pixels() {
+    #[test]
+    fn pipeline_keeps_size_and_untouched_pixels() {
         let src = DynamicImage::ImageRgb8(RgbImage::from_fn(300, 200, |x, y| Rgb([x as u8, y as u8, 7])));
-        let out = run(&src, &region(100, 80, 40, 20), &opts(), &Engine::Fill([255, 0, 255])).await.unwrap();
+        let out = run(&src, &region(100, 80, 40, 20), &opts(), &Engine::Fill([255, 0, 255])).unwrap();
         assert_eq!(out.image.dimensions(), (300, 200));
         let (a, b) = (src.to_rgb8(), out.image.to_rgb8());
         assert_eq!(b.get_pixel(120, 90), &Rgb([255, 0, 255]));
@@ -88,24 +89,24 @@ mod tests {
         assert_eq!(b.get_pixel(100 - 7, 90), a.get_pixel(100 - 7, 90));
     }
 
-    #[tokio::test]
-    async fn pipeline_preserves_alpha() {
+    #[test]
+    fn pipeline_preserves_alpha() {
         let src = DynamicImage::ImageRgba8(RgbaImage::from_pixel(64, 64, Rgba([10, 20, 30, 77])));
-        let out = run(&src, &region(20, 20, 10, 10), &opts(), &Engine::Fill([0, 0, 0])).await.unwrap();
+        let out = run(&src, &region(20, 20, 10, 10), &opts(), &Engine::Fill([0, 0, 0])).unwrap();
         assert!(out.image.color().has_alpha());
         assert_eq!(out.image.to_rgba8().get_pixel(25, 25)[3], 77);
     }
 
-    #[tokio::test]
-    async fn pipeline_clamps_region_for_smaller_image() {
+    #[test]
+    fn pipeline_clamps_region_for_smaller_image() {
         let src = DynamicImage::ImageRgb8(RgbImage::new(50, 50));
-        let out = run(&src, &region(40, 40, 30, 30), &opts(), &Engine::Fill([9, 9, 9])).await.unwrap();
+        let out = run(&src, &region(40, 40, 30, 30), &opts(), &Engine::Fill([9, 9, 9])).unwrap();
         assert_eq!(out.image.to_rgb8().get_pixel(49, 49), &Rgb([9, 9, 9]));
-        assert!(run(&src, &region(60, 60, 5, 5), &opts(), &Engine::Fill([9, 9, 9])).await.is_err());
+        assert!(run(&src, &region(60, 60, 5, 5), &opts(), &Engine::Fill([9, 9, 9])).is_err());
     }
 
-    #[tokio::test]
-    async fn pipeline_with_telea_removes_stroke_on_flat_background() {
+    #[test]
+    fn pipeline_with_telea_removes_stroke_on_flat_background() {
         let mut img = RgbImage::from_pixel(120, 80, Rgb([70, 140, 200]));
         for x in 40..80 {
             for y in 39..41 {
@@ -114,7 +115,7 @@ mod tests {
         }
         let src = DynamicImage::ImageRgb8(img);
         let o = PipelineOptions { refine_mask: true, grow: 1, feather: 2 };
-        let out = run(&src, &region(35, 30, 50, 20), &o, &Engine::Telea { radius: 5 }).await.unwrap();
+        let out = run(&src, &region(35, 30, 50, 20), &o, &Engine::Telea { radius: 5 }).unwrap();
         assert!(out.mask_refined);
         assert_eq!(out.image.to_rgb8().get_pixel(60, 40), &Rgb([70, 140, 200]));
     }

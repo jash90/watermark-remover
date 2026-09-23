@@ -70,8 +70,7 @@ fn psnr(a: &RgbImage, b: &RgbImage, r: &WatermarkRegion) -> f64 {
     }
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let images = match std::env::args().nth(1) {
         Some(dir) => from_folder(&dir),
         None => synthetic(),
@@ -83,7 +82,7 @@ async fn main() {
             for refine in [false, true] {
                 let opts = PipelineOptions { refine_mask: refine, grow: 2, feather: 3 };
                 let src = DynamicImage::ImageRgb8(marked.clone());
-                let out = run(&src, &region, &opts, &Engine::Telea { radius: 5 }).await.expect("pipeline");
+                let out = run(&src, &region, &opts, &Engine::Telea { radius: 5 }).expect("pipeline");
                 println!(
                     "{:<20} {:>7.2} {:>8} {:>9.2} {:>9.2}",
                     name,
