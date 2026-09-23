@@ -6,6 +6,10 @@ use std::collections::BinaryHeap;
 const KNOWN: u8 = 0;
 const BAND: u8 = 1;
 const INSIDE: u8 = 2;
+/// Not a source and not filled (e.g. fully transparent pixels).
+const IGNORED: u8 = 3;
+const SURROUNDED_BY_TRANSPARENT: &str =
+    "The selected area is surrounded by transparent pixels, so there is nothing to fill it from";
 const INF: f32 = 1.0e6;
 const NEIGHBOURS: [(i64, i64); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
 
@@ -21,9 +25,9 @@ impl Grid {
         (x >= 0 && y >= 0 && x < self.w && y < self.h).then(|| (y * self.w + x) as usize)
     }
 
-    /// T at (x, y) if it is not still inside the hole (KNOWN or BAND).
+    /// T at (x, y) if it is final or on the front (KNOWN or BAND).
     fn settled_t(&self, x: i64, y: i64) -> Option<f32> {
-        self.idx(x, y).filter(|&k| self.flags[k] != INSIDE).map(|k| self.t[k])
+        self.idx(x, y).filter(|&k| self.flags[k] == KNOWN || self.flags[k] == BAND).map(|k| self.t[k])
     }
 
     /// Eikonal update from two orthogonal neighbours; mirrors OpenCV's
@@ -56,8 +60,19 @@ impl Grid {
 /// Fast-marching inpainting (Telea 2004) without the image-gradient term.
 /// Fills every `HOLE` pixel of `mask` from the known pixels within `radius`.
 pub fn inpaint(img: &RgbImage, mask: &GrayImage, radius: u32) -> Result<RgbImage, String> {
+    inpaint_with_ignore(img, mask, None, radius)
+}
+
+/// Like `inpaint`, but pixels marked HOLE in `ignore` (e.g. fully transparent)
+/// are neither used as sources nor filled.
+pub fn inpaint_with_ignore(
+    img: &RgbImage,
+    mask: &GrayImage,
+    ignore: Option<&GrayImage>,
+    radius: u32,
+) -> Result<RgbImage, String> {
     let (w, h) = img.dimensions();
-    if mask.dimensions() != (w, h) {
+    if mask.dimensions() != (w, h) || ignore.is_some_and(|i| i.dimensions() != (w, h)) {
         return Err("Mask size does not match image size".to_string());
     }
     let mut g = Grid {
@@ -73,8 +88,21 @@ pub fn inpaint(img: &RgbImage, mask: &GrayImage, radius: u32) -> Result<RgbImage
             g.t[i] = INF;
         }
     }
-    if g.flags.iter().all(|&f| f == INSIDE) {
-        return Err("Nothing to inpaint from: the mask covers the whole area".to_string());
+    if let Some(ignore) = ignore {
+        for (x, y, m) in ignore.enumerate_pixels() {
+            if m[0] == HOLE {
+                let i = (y * w + x) as usize;
+                g.flags[i] = IGNORED;
+                g.t[i] = INF;
+            }
+        }
+    }
+    if !g.flags.contains(&KNOWN) {
+        return Err(if ignore.is_some() {
+            SURROUNDED_BY_TRANSPARENT.to_string()
+        } else {
+            "Nothing to inpaint from: the mask covers the whole area".to_string()
+        });
     }
 
     let mut px: Vec<[f32; 3]> = img.pixels().map(|p| [p[0] as f32, p[1] as f32, p[2] as f32]).collect();
@@ -112,6 +140,12 @@ pub fn inpaint(img: &RgbImage, mask: &GrayImage, radius: u32) -> Result<RgbImage
         }
     }
 
+    // Hole pixels the front never reached are cut off from every source by
+    // ignored (transparent) pixels; returning them unchanged would look like success.
+    if g.flags.contains(&INSIDE) {
+        return Err(SURROUNDED_BY_TRANSPARENT.to_string());
+    }
+
     Ok(RgbImage::from_fn(w, h, |x, y| {
         let p = px[(y * w + x) as usize];
         Rgb([p[0].round() as u8, p[1].round() as u8, p[2].round() as u8])
@@ -126,7 +160,7 @@ fn fill_pixel(g: &Grid, px: &[[f32; 3]], x: i64, y: i64, r: i64) -> [f32; 3] {
     for qy in (y - r).max(0)..=(y + r).min(g.h - 1) {
         for qx in (x - r).max(0)..=(x + r).min(g.w - 1) {
             let k = (qy * g.w + qx) as usize;
-            if k == i || g.flags[k] == INSIDE {
+            if k == i || g.flags[k] == INSIDE || g.flags[k] == IGNORED {
                 continue;
             }
             let (rx, ry) = ((x - qx) as f32, (y - qy) as f32);
@@ -227,6 +261,44 @@ mod tests {
     fn rejects_mask_covering_everything() {
         let img = RgbImage::new(8, 8);
         assert!(inpaint(&img, &hole_mask(8, 8, 0, 0, 8, 8), 5).is_err());
+    }
+
+    fn transparent_left(w: u32, h: u32, cols: u32) -> GrayImage {
+        GrayImage::from_fn(w, h, |x, _| Luma([if x < cols { HOLE } else { 0 }]))
+    }
+
+    #[test]
+    fn ignored_pixels_are_not_fill_sources() {
+        // Left 8 columns: transparent (RGB black underneath). Right: opaque red.
+        let img = RgbImage::from_fn(24, 12, |x, _| if x < 8 { Rgb([0, 0, 0]) } else { Rgb([200, 0, 0]) });
+        let mask = hole_mask(24, 12, 8, 3, 4, 6);
+        let out = inpaint_with_ignore(&img, &mask, Some(&transparent_left(24, 12, 8)), 5).unwrap();
+        for y in 3..9 {
+            for x in 8..12 {
+                assert_eq!(out.get_pixel(x, y), &Rgb([200, 0, 0]), "({x},{y}) picked up transparent black");
+            }
+        }
+    }
+
+    #[test]
+    fn hole_inside_transparent_area_is_left_alone() {
+        let img = RgbImage::from_pixel(12, 12, Rgb([7, 8, 9]));
+        let mask = hole_mask(12, 12, 2, 2, 3, 3);
+        let ignore = GrayImage::from_pixel(12, 12, Luma([HOLE]));
+        // Nothing known anywhere → error, not a panic.
+        assert!(inpaint_with_ignore(&img, &mask, Some(&ignore), 5).is_err());
+    }
+
+    #[test]
+    fn hole_walled_off_by_transparent_ring_is_an_error_not_a_silent_no_op() {
+        // Opaque 10x10 logo (the hole) inside a transparent ring, opaque background outside.
+        let img = RgbImage::from_pixel(30, 30, Rgb([40, 90, 140]));
+        let inner = |x: u32, y: u32| (10..20).contains(&x) && (10..20).contains(&y);
+        let ring = |x: u32, y: u32| (6..24).contains(&x) && (6..24).contains(&y) && !inner(x, y);
+        let mask = GrayImage::from_fn(30, 30, |x, y| Luma([if inner(x, y) { HOLE } else { 0 }]));
+        let ignore = GrayImage::from_fn(30, 30, |x, y| Luma([if ring(x, y) { HOLE } else { 0 }]));
+        let err = inpaint_with_ignore(&img, &mask, Some(&ignore), 5).unwrap_err();
+        assert!(err.contains("surrounded by transparent"), "{err}");
     }
 
     #[test]

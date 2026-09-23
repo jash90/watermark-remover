@@ -1,5 +1,6 @@
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::codecs::webp::WebPEncoder;
+use image::metadata::Orientation;
 use image::{DynamicImage, ImageEncoder, ImageReader};
 use jpeg_encoder::{ColorType, QuantizationTableType, SamplingFactor};
 use std::collections::HashMap;
@@ -18,6 +19,21 @@ pub fn load_oriented(path: &str) -> Result<DynamicImage, String> {
     let mut img = DynamicImage::from_decoder(decoder).map_err(|e| format!("Failed to decode image: {}", e))?;
     img.apply_orientation(orientation);
     Ok(img)
+}
+
+/// Displayed width and height (after EXIF orientation), read from the header only.
+pub fn read_dimensions(path: &str) -> Result<(u32, u32), String> {
+    let mut decoder = ImageReader::open(path)
+        .and_then(|r| r.with_guessed_format())
+        .map_err(|e| format!("Failed to open image: {}", e))?
+        .into_decoder()
+        .map_err(|e| format!("Failed to read image header: {}", e))?;
+    let (w, h) = image::ImageDecoder::dimensions(&decoder);
+    let orientation = image::ImageDecoder::orientation(&mut decoder).unwrap_or(Orientation::NoTransforms);
+    Ok(match orientation {
+        Orientation::Rotate90 | Orientation::Rotate270 | Orientation::Rotate90FlipH | Orientation::Rotate270FlipH => (h, w),
+        _ => (w, h),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,7 +211,9 @@ fn read_png_palette(bytes: &[u8]) -> Option<PngPalette> {
         return None;
     }
     let colors = plte?
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .enumerate()
         .map(|(k, c)| [c[0], c[1], c[2], trns.and_then(|t| t.get(k).copied()).unwrap_or(255)])
         .collect();
@@ -289,10 +307,22 @@ fn encode_indexed_png(img: &DynamicImage, palette: &PngPalette, icc: Option<&[u8
 }
 
 fn encode_jpeg(img: &DynamicImage, profile: Option<&JpegProfile>, icc: Option<&[u8]>) -> Result<Vec<u8>, String> {
-    let rgb = img.to_rgb8();
+    let greyscale = matches!(
+        img.color(),
+        image::ColorType::L8 | image::ColorType::La8 | image::ColorType::L16 | image::ColorType::La16
+    );
+    let (data, color_type, width, height) = if greyscale {
+        let l = img.to_luma8();
+        let (w, h) = l.dimensions();
+        (l.into_raw(), ColorType::Luma, w, h)
+    } else {
+        let c = img.to_rgb8();
+        let (w, h) = c.dimensions();
+        (c.into_raw(), ColorType::Rgb, w, h)
+    };
     let (w, h) = (
-        u16::try_from(rgb.width()).map_err(|_| "Image is too wide for JPEG".to_string())?,
-        u16::try_from(rgb.height()).map_err(|_| "Image is too tall for JPEG".to_string())?,
+        u16::try_from(width).map_err(|_| "Image is too wide for JPEG".to_string())?,
+        u16::try_from(height).map_err(|_| "Image is too tall for JPEG".to_string())?,
     );
     let mut buf = Vec::new();
     let mut encoder = jpeg_encoder::Encoder::new(&mut buf, FALLBACK_JPEG_QUALITY);
@@ -310,7 +340,7 @@ fn encode_jpeg(img: &DynamicImage, profile: Option<&JpegProfile>, icc: Option<&[
         encoder.add_icc_profile(icc).map_err(|e| format!("Failed to embed colour profile: {}", e))?;
     }
     encoder
-        .encode(rgb.as_raw(), w, h, ColorType::Rgb)
+        .encode(&data, w, h, color_type)
         .map_err(|e| format!("Failed to encode JPEG: {}", e))?;
     Ok(buf)
 }
@@ -484,6 +514,82 @@ mod tests {
         std::fs::write(&path, jpeg_with_orientation(4, 2, 6)).unwrap();
         let img = load_oriented(path.to_str().unwrap()).unwrap();
         assert_eq!(img.dimensions(), (2, 4));
+    }
+
+    /// 16x8 JPEG: left half red, right half blue, with the given EXIF orientation.
+    fn two_tone_jpeg(orientation: u16) -> Vec<u8> {
+        let img = RgbImage::from_fn(16, 8, |x, _| if x < 8 { Rgb([230, 10, 10]) } else { Rgb([10, 10, 230]) });
+        with_orientation(&img, orientation)
+    }
+
+    /// Encodes `img` and inserts an APP1/EXIF segment carrying only the Orientation tag.
+    fn with_orientation(img: &RgbImage, orientation: u16) -> Vec<u8> {
+        let mut jpeg = Vec::new();
+        JpegEncoder::new_with_quality(&mut jpeg, 95).encode_image(img).unwrap();
+        let mut tiff = vec![b'M', b'M', 0, 42, 0, 0, 0, 8, 0, 1];
+        tiff.extend_from_slice(&[0x01, 0x12, 0, 3, 0, 0, 0, 1]);
+        tiff.extend_from_slice(&orientation.to_be_bytes());
+        tiff.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+        let mut app1 = b"Exif\0\0".to_vec();
+        app1.extend_from_slice(&tiff);
+        let len = (app1.len() + 2) as u16;
+        let mut out = jpeg[..2].to_vec();
+        out.extend_from_slice(&[0xFF, 0xE1]);
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(&app1);
+        out.extend_from_slice(&jpeg[2..]);
+        out
+    }
+
+    fn load_bytes(name: &str, bytes: &[u8]) -> DynamicImage {
+        let path = std::env::temp_dir().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        load_oriented(path.to_str().unwrap()).unwrap()
+    }
+
+    fn is_red(p: image::Rgb<u8>) -> bool {
+        p[0] > 180 && p[2] < 70
+    }
+
+    #[test]
+    fn read_dimensions_matches_decoded_orientation() {
+        for (orientation, name) in [(1u16, "wmr_d1.jpg"), (3, "wmr_d3.jpg"), (6, "wmr_d6.jpg"), (8, "wmr_d8.jpg")] {
+            let bytes = two_tone_jpeg(orientation);
+            let decoded = load_bytes(name, &bytes);
+            let path = std::env::temp_dir().join(name);
+            assert_eq!(read_dimensions(path.to_str().unwrap()).unwrap(), decoded.dimensions(), "orientation {orientation}");
+        }
+    }
+
+    #[test]
+    fn greyscale_jpeg_stays_greyscale() {
+        let img = DynamicImage::ImageLuma8(image::GrayImage::from_fn(64, 48, |x, y| image::Luma([(x * 3 + y) as u8])));
+        let out = encode(&img, OutputFormat::Jpeg, &SourceHints::default()).unwrap();
+        assert_eq!(image::load_from_memory(&out).unwrap().color(), image::ColorType::L8);
+    }
+
+    #[test]
+    fn orientation_6_puts_left_half_on_top() {
+        let img = load_bytes("wmr_o6.jpg", &two_tone_jpeg(6)).to_rgb8();
+        assert_eq!(img.dimensions(), (8, 16));
+        assert!(is_red(*img.get_pixel(4, 3)), "top should be red");
+        assert!(!is_red(*img.get_pixel(4, 12)), "bottom should be blue");
+    }
+
+    #[test]
+    fn orientation_8_puts_left_half_at_bottom() {
+        let img = load_bytes("wmr_o8.jpg", &two_tone_jpeg(8)).to_rgb8();
+        assert_eq!(img.dimensions(), (8, 16));
+        assert!(!is_red(*img.get_pixel(4, 3)), "top should be blue");
+        assert!(is_red(*img.get_pixel(4, 12)), "bottom should be red");
+    }
+
+    #[test]
+    fn orientation_3_mirrors_halves() {
+        let img = load_bytes("wmr_o3.jpg", &two_tone_jpeg(3)).to_rgb8();
+        assert_eq!(img.dimensions(), (16, 8));
+        assert!(!is_red(*img.get_pixel(3, 4)), "left should be blue");
+        assert!(is_red(*img.get_pixel(12, 4)), "right should be red");
     }
 
     /// Minimal JPEG with an APP1/EXIF segment carrying only the Orientation tag.

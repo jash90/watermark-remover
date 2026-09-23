@@ -15,11 +15,12 @@ pub struct Refined {
 
 /// Shrinks a rectangular hole to the pixels that differ from the background
 /// predicted from the rectangle's surroundings (watermark strokes).
-pub fn refine_mask(crop: &RgbImage, rect_mask: &GrayImage, grow: u8) -> Result<Refined, String> {
-    let predicted = telea::inpaint(crop, rect_mask, 5)?;
+pub fn refine_mask(crop: &RgbImage, rect_mask: &GrayImage, grow: u8, ignore: Option<&GrayImage>) -> Result<Refined, String> {
+    let predicted = telea::inpaint_with_ignore(crop, rect_mask, ignore, 5)?;
+    let ignored = |x: u32, y: u32| ignore.is_some_and(|i| i.get_pixel(x, y)[0] == HOLE);
     let (w, h) = crop.dimensions();
     let diff = GrayImage::from_fn(w, h, |x, y| {
-        if rect_mask.get_pixel(x, y)[0] != HOLE {
+        if rect_mask.get_pixel(x, y)[0] != HOLE || ignored(x, y) {
             return Luma([0]);
         }
         let (a, b) = (crop.get_pixel(x, y), predicted.get_pixel(x, y));
@@ -111,7 +112,7 @@ mod tests {
                 img.put_pixel(x, y, Rgb([250, 250, 250]));
             }
         }
-        let r = refine_mask(&img, &rect, 1).unwrap();
+        let r = refine_mask(&img, &rect, 1, None).unwrap();
         assert!(r.used_refinement);
         assert_eq!(r.mask.get_pixel(30, 30)[0], HOLE);
         assert_eq!(r.mask.get_pixel(30, 22)[0], 0, "background inside the rectangle is kept");
@@ -130,7 +131,7 @@ mod tests {
                 img.put_pixel(x, y, Rgb([90 + lift, 110u8.saturating_add(lift), 130 + lift / 2]));
             }
         }
-        let r = refine_mask(&img, &rect, 1).unwrap();
+        let r = refine_mask(&img, &rect, 1, None).unwrap();
         assert!(r.used_refinement);
         let masked: Vec<u8> = (20..40).map(|y| (r.mask.get_pixel(40, y)[0] == HOLE) as u8).collect();
         // Every ring still lifted by 28+ levels (visible as a ghost) must be masked.
@@ -150,7 +151,7 @@ mod tests {
                 img.put_pixel(x, y, Rgb([0, 0, 0]));
             }
         }
-        let r = refine_mask(&img, &rect, 1).unwrap();
+        let r = refine_mask(&img, &rect, 1, None).unwrap();
         assert!(!r.used_refinement);
         assert_eq!(r.mask, rect);
     }
