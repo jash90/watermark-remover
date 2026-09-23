@@ -486,6 +486,65 @@ mod tests {
         assert_eq!(img.dimensions(), (2, 4));
     }
 
+    /// 16x8 JPEG: left half red, right half blue, with the given EXIF orientation.
+    fn two_tone_jpeg(orientation: u16) -> Vec<u8> {
+        let img = RgbImage::from_fn(16, 8, |x, _| if x < 8 { Rgb([230, 10, 10]) } else { Rgb([10, 10, 230]) });
+        with_orientation(&img, orientation)
+    }
+
+    /// Encodes `img` and inserts an APP1/EXIF segment carrying only the Orientation tag.
+    fn with_orientation(img: &RgbImage, orientation: u16) -> Vec<u8> {
+        let mut jpeg = Vec::new();
+        JpegEncoder::new_with_quality(&mut jpeg, 95).encode_image(img).unwrap();
+        let mut tiff = vec![b'M', b'M', 0, 42, 0, 0, 0, 8, 0, 1];
+        tiff.extend_from_slice(&[0x01, 0x12, 0, 3, 0, 0, 0, 1]);
+        tiff.extend_from_slice(&orientation.to_be_bytes());
+        tiff.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+        let mut app1 = b"Exif\0\0".to_vec();
+        app1.extend_from_slice(&tiff);
+        let len = (app1.len() + 2) as u16;
+        let mut out = jpeg[..2].to_vec();
+        out.extend_from_slice(&[0xFF, 0xE1]);
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(&app1);
+        out.extend_from_slice(&jpeg[2..]);
+        out
+    }
+
+    fn load_bytes(name: &str, bytes: &[u8]) -> DynamicImage {
+        let path = std::env::temp_dir().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        load_oriented(path.to_str().unwrap()).unwrap()
+    }
+
+    fn is_red(p: image::Rgb<u8>) -> bool {
+        p[0] > 180 && p[2] < 70
+    }
+
+    #[test]
+    fn orientation_6_puts_left_half_on_top() {
+        let img = load_bytes("wmr_o6.jpg", &two_tone_jpeg(6)).to_rgb8();
+        assert_eq!(img.dimensions(), (8, 16));
+        assert!(is_red(*img.get_pixel(4, 3)), "top should be red");
+        assert!(!is_red(*img.get_pixel(4, 12)), "bottom should be blue");
+    }
+
+    #[test]
+    fn orientation_8_puts_left_half_at_bottom() {
+        let img = load_bytes("wmr_o8.jpg", &two_tone_jpeg(8)).to_rgb8();
+        assert_eq!(img.dimensions(), (8, 16));
+        assert!(!is_red(*img.get_pixel(4, 3)), "top should be blue");
+        assert!(is_red(*img.get_pixel(4, 12)), "bottom should be red");
+    }
+
+    #[test]
+    fn orientation_3_mirrors_halves() {
+        let img = load_bytes("wmr_o3.jpg", &two_tone_jpeg(3)).to_rgb8();
+        assert_eq!(img.dimensions(), (16, 8));
+        assert!(!is_red(*img.get_pixel(3, 4)), "left should be blue");
+        assert!(is_red(*img.get_pixel(12, 4)), "right should be red");
+    }
+
     /// Minimal JPEG with an APP1/EXIF segment carrying only the Orientation tag.
     fn jpeg_with_orientation(w: u32, h: u32, orientation: u16) -> Vec<u8> {
         let mut jpeg = Vec::new();
