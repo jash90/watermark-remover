@@ -28,8 +28,5 @@ impl Default for RemovalOptions {
 }
 
 pub fn get_image_dimensions(image_path: &str) -> Result<(u32, u32), String> {
-    let img = image::open(image_path)
-        .map_err(|e| format!("Failed to load image: {}", e))?;
-
-    Ok(img.dimensions())
+    Ok(crate::removal::codec::load_oriented(image_path)?.dimensions())
 }
