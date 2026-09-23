@@ -4,40 +4,12 @@ interface OptionsPanelProps {
   options: RemovalOptions;
   onChange: (options: RemovalOptions) => void;
   disabled?: boolean;
-  hasApiKey?: boolean;
 }
 
-export function OptionsPanel({ options, onChange, disabled = false, hasApiKey = false }: OptionsPanelProps) {
+export function OptionsPanel({ options, onChange, disabled = false }: OptionsPanelProps) {
   return (
     <div className={`options-panel ${disabled ? 'disabled' : ''}`}>
       <h3>Options</h3>
-
-      <div className="option-group">
-        <label>Processing Method</label>
-        <label className="checkbox-label">
-          <input
-            type="radio"
-            name="engine"
-            checked={options.engine === 'telea'}
-            onChange={() => onChange({ ...options, engine: 'telea' })}
-            disabled={disabled}
-          />
-          Local (fast, offline)
-        </label>
-        <label className="checkbox-label">
-          <input
-            type="radio"
-            name="engine"
-            checked={options.engine === 'gemini'}
-            onChange={() => onChange({ ...options, engine: 'gemini' })}
-            disabled={disabled}
-          />
-          Google Gemini (cloud, needs API key)
-        </label>
-        {options.engine === 'gemini' && !hasApiKey && (
-          <p className="option-warning">API key not configured. Please set it in Settings.</p>
-        )}
-      </div>
 
       <div className="option-group">
         <label className="checkbox-label">
@@ -62,10 +34,10 @@ export function OptionsPanel({ options, onChange, disabled = false, hasApiKey = 
             onChange={(e) => onChange({ ...options, lossless: e.target.checked })}
             disabled={disabled}
           />
-          Lossless compression
+          Save JPEG as PNG (lossless)
         </label>
         <p className="option-description">
-          JPEG is saved as PNG. PNG and WebP are always lossless.
+          Avoids re-compressing the photo, but a PNG is usually 4–5× larger than the JPEG. Leave off to keep the original file size. PNG and WebP inputs are always saved losslessly.
         </p>
       </div>
     </div>
