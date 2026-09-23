@@ -1,4 +1,6 @@
 pub mod tiling;
+#[cfg(ai_upscale)]
+pub mod onnx;
 
 use serde::{Deserialize, Serialize};
 

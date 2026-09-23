@@ -21,8 +21,8 @@ pub fn tiles(w: u32, h: u32, tile: u32) -> Vec<Tile> {
     out
 }
 
-/// Runs `run` on overlapping tiles (each grown by `pad` px of real context, clamped
-/// to the image) and stitches only the un-padded centre of every result.
+/// Runs `run` on overlapping, equally sized windows (each tile plus at least `pad` px
+/// of real context where the image allows) and stitches only every tile's centre.
 pub fn upscale_tiled(
     img: &RgbImage,
     factor: u32,
@@ -39,8 +39,14 @@ pub fn upscale_tiled(
         if cancel.load(Ordering::SeqCst) {
             return Err("Cancelled".to_string());
         }
-        let (px, py) = (t.x.saturating_sub(pad), t.y.saturating_sub(pad));
-        let (pw, ph) = ((t.x + t.w + pad).min(w) - px, (t.y + t.h + pad).min(h) - py);
+        // Every window has the same size (tile + 2·pad, or the whole image if smaller):
+        // border windows slide inwards instead of shrinking. Accelerators (CoreML)
+        // compile once per input shape, and edge tiles get real context.
+        let window = |start: u32, full: u32| {
+            let size = (tile + 2 * pad).min(full);
+            (start.saturating_sub(pad).min(full - size), size)
+        };
+        let ((px, pw), (py, ph)) = (window(t.x, w), window(t.y, h));
         let input = imageops::crop_imm(img, px, py, pw, ph).to_image();
         let result = run(&input)?;
         if result.dimensions() != (pw * factor, ph * factor) {
