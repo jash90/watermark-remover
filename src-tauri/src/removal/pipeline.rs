@@ -1,11 +1,11 @@
-use super::composite::composite;
+use super::composite::composite_into;
 use super::engine::Engine;
 use super::geometry::{clamp_region, context_margin, expand};
 use super::mask::{dilate, rect_mask, HOLE};
 use super::refine::refine_mask;
 use crate::image_processor::WatermarkRegion;
 use image::imageops::{self, FilterType};
-use image::{DynamicImage, GenericImageView, GrayImage, Luma, Rgba, RgbaImage, RgbImage};
+use image::{DynamicImage, GenericImageView, GrayImage, Luma};
 
 pub struct PipelineOptions {
     pub refine_mask: bool,
@@ -31,7 +31,7 @@ pub fn run(
     let (w, h) = original.dimensions();
     let hole = clamp_region(region, w, h)?;
     let crop = expand(hole, context_margin(hole), w, h);
-    let mut rgb = original.to_rgb8();
+    let rgb = original.to_rgb8();
     let crop_img = imageops::crop_imm(&rgb, crop.x, crop.y, crop.w, crop.h).to_image();
     // Fully transparent pixels hide arbitrary RGB (often black); never copy them into the fill.
     let ignore = original.color().has_alpha().then(|| {
@@ -55,26 +55,15 @@ pub fn run(
     } else {
         imageops::resize(&patch, crop.w, crop.h, FilterType::Lanczos3)
     };
-    composite(&mut rgb, &patch, crop, &mask, opts.feather);
-
-    Ok(PipelineOutput { image: restore_alpha(original, rgb), mask_refined })
-}
-
-fn restore_alpha(original: &DynamicImage, rgb: RgbImage) -> DynamicImage {
-    if !original.color().has_alpha() {
-        return DynamicImage::ImageRgb8(rgb);
-    }
-    let alpha = original.to_rgba8();
-    DynamicImage::ImageRgba8(RgbaImage::from_fn(rgb.width(), rgb.height(), |x, y| {
-        let p = rgb.get_pixel(x, y);
-        Rgba([p[0], p[1], p[2], alpha.get_pixel(x, y)[3]])
-    }))
+    let mut image = original.clone();
+    composite_into(&mut image, &patch, crop, &mask, opts.feather);
+    Ok(PipelineOutput { image, mask_refined })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::Rgb;
+    use image::{Rgb, RgbImage, Rgba, RgbaImage};
 
     fn opts() -> PipelineOptions {
         PipelineOptions { refine_mask: false, grow: 0, feather: 2 }
@@ -94,6 +83,25 @@ mod tests {
         let p = out.image.to_rgba8();
         assert_eq!(p.get_pixel(44, 20), &Rgba([20, 180, 40, 255]));
         assert_eq!(p.get_pixel(38, 20)[3], 0, "transparent pixels stay transparent");
+    }
+
+    #[test]
+    fn pipeline_keeps_rgba16() {
+        let src = DynamicImage::ImageRgba16(image::ImageBuffer::from_pixel(64, 64, Rgba([1000u16, 20000, 60000, 12345])));
+        let out = run(&src, &region(20, 20, 10, 10), &opts(), &Engine::Fill([255, 0, 0])).unwrap();
+        assert_eq!(out.image.color(), image::ColorType::Rgba16);
+        let px = out.image.as_rgba16().unwrap();
+        assert_eq!(px.get_pixel(25, 25), &Rgba([65535, 0, 0, 12345]));
+        assert_eq!(px.get_pixel(2, 2), &Rgba([1000, 20000, 60000, 12345]), "untouched pixel must be identical");
+    }
+
+    #[test]
+    fn pipeline_keeps_greyscale() {
+        let src = DynamicImage::ImageLuma8(image::GrayImage::from_pixel(64, 64, image::Luma([90])));
+        let out = run(&src, &region(20, 20, 10, 10), &opts(), &Engine::Fill([255, 255, 255])).unwrap();
+        assert_eq!(out.image.color(), image::ColorType::L8);
+        assert_eq!(out.image.as_luma8().unwrap().get_pixel(25, 25)[0], 255);
+        assert_eq!(out.image.as_luma8().unwrap().get_pixel(1, 1)[0], 90);
     }
 
     #[test]

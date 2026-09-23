@@ -305,10 +305,22 @@ fn encode_indexed_png(img: &DynamicImage, palette: &PngPalette, icc: Option<&[u8
 }
 
 fn encode_jpeg(img: &DynamicImage, profile: Option<&JpegProfile>, icc: Option<&[u8]>) -> Result<Vec<u8>, String> {
-    let rgb = img.to_rgb8();
+    let greyscale = matches!(
+        img.color(),
+        image::ColorType::L8 | image::ColorType::La8 | image::ColorType::L16 | image::ColorType::La16
+    );
+    let (data, color_type, width, height) = if greyscale {
+        let l = img.to_luma8();
+        let (w, h) = l.dimensions();
+        (l.into_raw(), ColorType::Luma, w, h)
+    } else {
+        let c = img.to_rgb8();
+        let (w, h) = c.dimensions();
+        (c.into_raw(), ColorType::Rgb, w, h)
+    };
     let (w, h) = (
-        u16::try_from(rgb.width()).map_err(|_| "Image is too wide for JPEG".to_string())?,
-        u16::try_from(rgb.height()).map_err(|_| "Image is too tall for JPEG".to_string())?,
+        u16::try_from(width).map_err(|_| "Image is too wide for JPEG".to_string())?,
+        u16::try_from(height).map_err(|_| "Image is too tall for JPEG".to_string())?,
     );
     let mut buf = Vec::new();
     let mut encoder = jpeg_encoder::Encoder::new(&mut buf, FALLBACK_JPEG_QUALITY);
@@ -326,7 +338,7 @@ fn encode_jpeg(img: &DynamicImage, profile: Option<&JpegProfile>, icc: Option<&[
         encoder.add_icc_profile(icc).map_err(|e| format!("Failed to embed colour profile: {}", e))?;
     }
     encoder
-        .encode(rgb.as_raw(), w, h, ColorType::Rgb)
+        .encode(&data, w, h, color_type)
         .map_err(|e| format!("Failed to encode JPEG: {}", e))?;
     Ok(buf)
 }
@@ -545,6 +557,13 @@ mod tests {
             let path = std::env::temp_dir().join(name);
             assert_eq!(read_dimensions(path.to_str().unwrap()).unwrap(), decoded.dimensions(), "orientation {orientation}");
         }
+    }
+
+    #[test]
+    fn greyscale_jpeg_stays_greyscale() {
+        let img = DynamicImage::ImageLuma8(image::GrayImage::from_fn(64, 48, |x, y| image::Luma([(x * 3 + y) as u8])));
+        let out = encode(&img, OutputFormat::Jpeg, &SourceHints::default()).unwrap();
+        assert_eq!(image::load_from_memory(&out).unwrap().color(), image::ColorType::L8);
     }
 
     #[test]

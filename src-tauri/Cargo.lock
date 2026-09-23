@@ -5238,6 +5238,7 @@ dependencies = [
  "image",
  "imageproc",
  "jpeg-encoder",
+ "num-traits",
  "png 0.18.0",
  "serde",
  "serde_json",
