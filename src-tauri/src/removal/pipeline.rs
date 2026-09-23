@@ -1,11 +1,11 @@
 use super::composite::composite;
 use super::engine::Engine;
 use super::geometry::{clamp_region, context_margin, expand};
-use super::mask::{dilate, rect_mask};
+use super::mask::{dilate, rect_mask, HOLE};
 use super::refine::refine_mask;
 use crate::image_processor::WatermarkRegion;
 use image::imageops::{self, FilterType};
-use image::{DynamicImage, GenericImageView, Rgba, RgbaImage, RgbImage};
+use image::{DynamicImage, GenericImageView, GrayImage, Luma, Rgba, RgbaImage, RgbImage};
 
 pub struct PipelineOptions {
     pub refine_mask: bool,
@@ -33,16 +33,23 @@ pub fn run(
     let crop = expand(hole, context_margin(hole), w, h);
     let mut rgb = original.to_rgb8();
     let crop_img = imageops::crop_imm(&rgb, crop.x, crop.y, crop.w, crop.h).to_image();
+    // Fully transparent pixels hide arbitrary RGB (often black); never copy them into the fill.
+    let ignore = original.color().has_alpha().then(|| {
+        let rgba = original.to_rgba8();
+        GrayImage::from_fn(crop.w, crop.h, |x, y| {
+            Luma([if rgba.get_pixel(crop.x + x, crop.y + y)[3] == 0 { HOLE } else { 0 }])
+        })
+    });
 
     let rect = rect_mask(crop, hole);
     let (mask, mask_refined) = if opts.refine_mask {
-        let r = refine_mask(&crop_img, &rect, opts.grow)?;
+        let r = refine_mask(&crop_img, &rect, opts.grow, ignore.as_ref())?;
         (r.mask, r.used_refinement)
     } else {
         (dilate(&rect, opts.grow), false)
     };
 
-    let patch = engine.inpaint(&crop_img, &mask)?;
+    let patch = engine.inpaint(&crop_img, &mask, ignore.as_ref())?;
     let patch = if patch.dimensions() == (crop.w, crop.h) {
         patch
     } else {
@@ -75,6 +82,18 @@ mod tests {
 
     fn region(x: i32, y: i32, width: i32, height: i32) -> WatermarkRegion {
         WatermarkRegion { x, y, width, height }
+    }
+
+    #[test]
+    fn transparent_neighbours_do_not_darken_the_fill() {
+        // Left half fully transparent (black RGB), right half opaque green, hole straddling the edge.
+        let src = DynamicImage::ImageRgba8(RgbaImage::from_fn(80, 40, |x, _| {
+            if x < 40 { Rgba([0, 0, 0, 0]) } else { Rgba([20, 180, 40, 255]) }
+        }));
+        let out = run(&src, &region(36, 15, 12, 10), &opts(), &Engine::Telea { radius: 5 }).unwrap();
+        let p = out.image.to_rgba8();
+        assert_eq!(p.get_pixel(44, 20), &Rgba([20, 180, 40, 255]));
+        assert_eq!(p.get_pixel(38, 20)[3], 0, "transparent pixels stay transparent");
     }
 
     #[test]
