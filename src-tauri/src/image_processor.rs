@@ -9,21 +9,31 @@ pub struct WatermarkRegion {
     pub height: i32,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct RemovalOptions {
-    #[serde(default = "default_lossless")]
-    pub lossless: bool,
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum EngineKind {
+    #[default]
+    Telea,
+    Gemini,
 }
 
-fn default_lossless() -> bool {
-    false
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RemovalOptions {
+    #[serde(default)]
+    pub lossless: bool,
+    #[serde(default)]
+    pub engine: EngineKind,
+    #[serde(default = "default_refine_mask")]
+    pub refine_mask: bool,
+}
+
+fn default_refine_mask() -> bool {
+    true
 }
 
 impl Default for RemovalOptions {
     fn default() -> Self {
-        Self {
-            lossless: default_lossless(),
-        }
+        Self { lossless: false, engine: EngineKind::default(), refine_mask: default_refine_mask() }
     }
 }
 
