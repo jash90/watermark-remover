@@ -1,12 +1,10 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use reqwest::Client;
+use image::{DynamicImage, GrayImage, RgbImage};
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::Path;
 
-use crate::image_processor::WatermarkRegion;
-
-const GEMINI_API_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent";
+const GEMINI_API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
+const GEMINI_IMAGE_MODEL: &str = "gemini-3.1-flash-image";
 
 #[derive(Debug, Serialize)]
 struct GeminiRequest {
@@ -90,130 +88,52 @@ impl GeminiClient {
         }
     }
 
-    pub async fn remove_watermark(
-        &self,
-        image_path: &str,
-        region: &WatermarkRegion,
-    ) -> Result<Vec<u8>, String> {
-        // Read and encode image
-        let image_bytes = fs::read(image_path)
-            .map_err(|e| format!("Failed to read image: {}", e))?;
-        let image_base64 = BASE64.encode(&image_bytes);
-
-        // Determine mime type
-        let extension = Path::new(image_path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("png")
-            .to_lowercase();
-
-        let mime_type = match extension.as_str() {
-            "jpg" | "jpeg" => "image/jpeg",
-            "png" => "image/png",
-            "webp" => "image/webp",
-            "gif" => "image/gif",
-            _ => "image/png",
-        };
-
-        // Build prompt with region information
-        let prompt = format!(
-            "Remove the watermark or unwanted element from this image. \
-            The watermark is located at position x={}, y={} with width={} and height={}. \
-            Seamlessly fill the area with appropriate background content that matches the surrounding pixels. \
-            Return only the edited image without any text response.",
-            region.x, region.y, region.width, region.height
-        );
-
-        // Build request
+    /// Fills the white pixels of `mask` in `crop`. Only the crop is sent; the
+    /// caller composites the answer back onto the full-resolution original.
+    pub async fn inpaint(&self, crop: &RgbImage, mask: &GrayImage) -> Result<RgbImage, String> {
+        let prompt = "The first image is a crop of a photo. The second image is a mask of the same size: \
+            white pixels mark a watermark or overlay. Return the first image with ONLY the white-masked \
+            pixels replaced by background that naturally continues the surrounding content. Keep the \
+            framing, size, colours and every unmasked pixel unchanged. Do not add any text.";
         let request = GeminiRequest {
             contents: vec![Content {
                 parts: vec![
-                    Part::InlineData {
-                        inline_data: InlineData {
-                            mime_type: mime_type.to_string(),
-                            data: image_base64,
-                        },
-                    },
-                    Part::Text { text: prompt },
+                    Part::InlineData { inline_data: png_part(&DynamicImage::ImageRgb8(crop.clone()))? },
+                    Part::InlineData { inline_data: png_part(&DynamicImage::ImageLuma8(mask.clone()))? },
+                    Part::Text { text: prompt.to_string() },
                 ],
             }],
             generation_config: GenerationConfig {
                 response_modalities: vec!["TEXT".to_string(), "IMAGE".to_string()],
             },
         };
-
-        // Make API request
-        let url = format!("{}?key={}", GEMINI_API_URL, self.api_key);
-
+        let url = format!("{}/models/{}:generateContent", GEMINI_API_BASE, GEMINI_IMAGE_MODEL);
         let response = self
             .client
             .post(&url)
+            .header("x-goog-api-key", &self.api_key)
             .json(&request)
             .send()
             .await
-            .map_err(|e| format!("API request failed: {}", e))?;
-
+            .map_err(|e| format!("API request failed: {}", e.without_url()))?;
         let status = response.status();
-        let response_text = response
-            .text()
-            .await
-            .map_err(|e| format!("Failed to read response: {}", e))?;
-
+        let text = response.text().await.map_err(|e| format!("Failed to read response: {}", e))?;
         if !status.is_success() {
-            return Err(format!("API returned error status {}: {}", status, response_text));
+            return Err(format!("API returned error status {}: {}", status, text));
         }
-
-        let gemini_response: GeminiResponse = serde_json::from_str(&response_text)
-            .map_err(|e| format!("Failed to parse response: {}. Response: {}", e, response_text))?;
-
-        // Check for API error
-        if let Some(error) = gemini_response.error {
-            return Err(format!(
-                "Gemini API error: {} (status: {})",
-                error.message,
-                error.status.unwrap_or_default()
-            ));
-        }
-
-        // Extract image from response
-        let candidates = gemini_response
-            .candidates
-            .ok_or("No candidates in response")?;
-
-        let candidate = candidates.first().ok_or("Empty candidates array")?;
-
-        let content = candidate
-            .content
-            .as_ref()
-            .ok_or("No content in candidate")?;
-
-        let parts = content
-            .parts
-            .as_ref()
-            .ok_or("No parts in content")?;
-
-        // Find the image part
-        for part in parts {
-            if let Some(inline_data) = &part.inline_data {
-                let image_bytes = BASE64
-                    .decode(&inline_data.data)
-                    .map_err(|e| format!("Failed to decode response image: {}", e))?;
-                return Ok(image_bytes);
-            }
-        }
-
-        Err("No image found in API response".to_string())
+        let bytes = extract_image(&text)?;
+        Ok(image::load_from_memory(&bytes)
+            .map_err(|e| format!("Failed to decode response image: {}", e))?
+            .to_rgb8())
     }
 
     pub async fn test_connection(&self) -> Result<bool, String> {
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models?key={}",
-            self.api_key
-        );
+        let url = format!("{}/models", GEMINI_API_BASE);
 
         let response = self
             .client
             .get(&url)
+            .header("x-goog-api-key", &self.api_key)
             .send()
             .await
             .map_err(|e| format!("Connection test failed: {}", e))?;
@@ -228,14 +148,12 @@ impl GeminiClient {
     }
 
     pub async fn list_models(&self) -> Result<Vec<String>, String> {
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models?key={}",
-            self.api_key
-        );
+        let url = format!("{}/models", GEMINI_API_BASE);
 
         let response = self
             .client
             .get(&url)
+            .header("x-goog-api-key", &self.api_key)
             .send()
             .await
             .map_err(|e| format!("Failed to list models: {}", e))?;
@@ -260,5 +178,59 @@ impl GeminiClient {
             .unwrap_or_default();
 
         Ok(models)
+    }
+}
+
+fn png_part(img: &DynamicImage) -> Result<InlineData, String> {
+    let bytes = crate::removal::codec::encode(img, crate::removal::codec::OutputFormat::Png)?;
+    Ok(InlineData { mime_type: "image/png".to_string(), data: BASE64.encode(bytes) })
+}
+
+fn extract_image(response_text: &str) -> Result<Vec<u8>, String> {
+    let response: GeminiResponse = serde_json::from_str(response_text)
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+    if let Some(error) = response.error {
+        return Err(format!("Gemini API error: {} (status: {})", error.message, error.status.unwrap_or_default()));
+    }
+    let parts = response
+        .candidates
+        .and_then(|c| c.into_iter().next())
+        .and_then(|c| c.content)
+        .and_then(|c| c.parts)
+        .ok_or("Gemini returned no content")?;
+    let mut texts = Vec::new();
+    for part in parts {
+        if let Some(inline) = part.inline_data {
+            return BASE64.decode(&inline.data).map_err(|e| format!("Failed to decode response image: {}", e));
+        }
+        if let Some(t) = part.text {
+            texts.push(t);
+        }
+    }
+    Err(if texts.is_empty() {
+        "Gemini returned no image".to_string()
+    } else {
+        format!("Gemini returned no image: {}", texts.join(" "))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_only_reply_surfaces_model_text() {
+        let body = r#"{"candidates":[{"content":{"parts":[{"text":"I can't help remove watermarks."}]}}]}"#;
+        let err = extract_image(body).unwrap_err();
+        assert!(err.contains("I can't help remove watermarks."), "{err}");
+    }
+
+    #[test]
+    fn image_reply_is_decoded() {
+        let body = format!(
+            r#"{{"candidates":[{{"content":{{"parts":[{{"inlineData":{{"mimeType":"image/png","data":"{}"}}}}]}}}}]}}"#,
+            BASE64.encode([1u8, 2, 3])
+        );
+        assert_eq!(extract_image(&body).unwrap(), vec![1, 2, 3]);
     }
 }

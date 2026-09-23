@@ -1,6 +1,9 @@
 use crate::gemini_client::GeminiClient;
-use crate::image_processor::{self, RemovalOptions, WatermarkRegion};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use crate::image_processor::{self, EngineKind, RemovalOptions, WatermarkRegion};
+use crate::removal::codec;
+use crate::removal::engine::Engine;
+use crate::removal::pipeline::{self, PipelineOptions};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -65,107 +68,50 @@ pub async fn remove_watermark(
     options: Option<RemovalOptions>,
 ) -> Result<ProcessResult, String> {
     let options = options.unwrap_or_default();
-
-    // Get original file size
     let original_size = fs::metadata(&image_path)
         .map_err(|e| format!("Failed to get original file size: {}", e))?
         .len();
 
-    // Get API key from store
-    let api_key = get_stored_api_key(&app)?;
-
-    if api_key.is_empty() {
-        return Err("Gemini API key not configured. Please set it in Settings.".to_string());
-    }
-
-    let client = GeminiClient::new(api_key);
-
-    // Get original extension
-    let input_path = PathBuf::from(&image_path);
-    let original_extension = input_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("png");
-
-    // Call Gemini API
-    let processed_bytes = client
-        .remove_watermark(&image_path, &region)
-        .await?;
-
-    // Apply lossless re-encoding if requested
-    let (final_bytes, final_extension) = if options.lossless {
-        reencode_lossless(&processed_bytes, original_extension)?
-    } else {
-        (processed_bytes, original_extension.to_string())
+    let engine = match options.engine {
+        EngineKind::Telea => Engine::Telea { radius: 5 },
+        EngineKind::Gemini => {
+            let api_key = get_stored_api_key(&app)?;
+            if api_key.is_empty() {
+                return Err("Gemini API key not configured. Please set it in Settings.".to_string());
+            }
+            Engine::Gemini(GeminiClient::new(api_key))
+        }
     };
 
+    let original = codec::load_oriented(&image_path)?;
+    let pipeline_options = PipelineOptions { refine_mask: options.refine_mask, grow: 2, feather: 3 };
+    let output = pipeline::run(&original, &region, &pipeline_options, &engine).await?;
+
+    let original_extension = PathBuf::from(&image_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_string();
+    let format = codec::output_format(&original_extension, options.lossless);
+    let final_bytes = codec::encode(&output.image, format)?;
     let processed_size = final_bytes.len() as u64;
 
-    // Generate unique output filename with final extension
     let output_filename = format!(
         "processed_{}_{}.{}",
         Uuid::new_v4().to_string().split('-').next().unwrap_or("img"),
         chrono_lite_timestamp(),
-        final_extension
+        format.extension()
     );
-
-    let temp_dir = get_temp_dir()?;
-    let output_path = temp_dir.join(&output_filename);
-    let output_path_str = output_path.to_string_lossy().to_string();
-
-    // Save the result
+    let output_path = get_temp_dir()?.join(&output_filename);
     fs::write(&output_path, &final_bytes)
         .map_err(|e| format!("Failed to save processed image: {}", e))?;
 
-    // Encode as base64 for preview
-    let base64_preview = BASE64.encode(&final_bytes);
-
-    // Determine MIME type based on final extension
-    let mime_type = match final_extension.to_lowercase().as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "webp" => "image/webp",
-        "gif" => "image/gif",
-        _ => "image/png",
-    };
-
     Ok(ProcessResult {
-        output_path: output_path_str,
-        base64_preview: Some(format!("data:{};base64,{}", mime_type, base64_preview)),
+        output_path: output_path.to_string_lossy().to_string(),
+        base64_preview: Some(format!("data:{};base64,{}", format.mime(), BASE64.encode(&final_bytes))),
         original_size,
         processed_size,
     })
-}
-
-/// Re-encode image bytes with lossless compression using the image crate
-fn reencode_lossless(bytes: &[u8], original_ext: &str) -> Result<(Vec<u8>, String), String> {
-    use image::ImageFormat;
-    use std::io::Cursor;
-
-    // Decode image from bytes
-    let img = image::load_from_memory(bytes)
-        .map_err(|e| format!("Failed to decode image for lossless re-encoding: {}", e))?;
-
-    let (format, ext) = match original_ext.to_lowercase().as_str() {
-        "jpg" | "jpeg" => {
-            // JPEG doesn't support lossless - convert to PNG
-            (ImageFormat::Png, "png")
-        }
-        "webp" => {
-            // WebP lossless - use PNG as fallback since image crate doesn't support lossless WebP encoding
-            (ImageFormat::Png, "png")
-        }
-        _ => {
-            // PNG and others - use PNG lossless
-            (ImageFormat::Png, "png")
-        }
-    };
-
-    let mut output_buf = Cursor::new(Vec::new());
-    img.write_to(&mut output_buf, format)
-        .map_err(|e| format!("Failed to encode lossless image: {}", e))?;
-
-    Ok((output_buf.into_inner(), ext.to_string()))
 }
 
 #[tauri::command]

@@ -1,8 +1,10 @@
 use super::telea;
+use crate::gemini_client::GeminiClient;
 use image::{GrayImage, RgbImage};
 
 pub enum Engine {
     Telea { radius: u32 },
+    Gemini(GeminiClient),
     #[cfg(test)]
     Fill([u8; 3]),
 }
@@ -17,6 +19,7 @@ impl Engine {
                     .await
                     .map_err(|e| format!("Inpainting task failed: {}", e))?
             }
+            Engine::Gemini(client) => client.inpaint(&crop, &mask).await,
             #[cfg(test)]
             Engine::Fill(c) => Ok(RgbImage::from_fn(crop.width(), crop.height(), |x, y| {
                 if mask.get_pixel(x, y)[0] == super::mask::HOLE { image::Rgb(*c) } else { *crop.get_pixel(x, y) }
