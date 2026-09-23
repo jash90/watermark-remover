@@ -128,6 +128,7 @@ jobs:
             - Local watermark removal (no API key, no internet, images never leave your computer)
             - Detects the watermark's shape inside the selection and keeps the rest of the image untouched
             - Output keeps the original resolution and JPEG file size
+            - AI upscaling 2x / 4x / 8x (Real-ESRGAN, offline; Intel Macs use Lanczos)
             - Before/After comparison and batch processing
 
             ### Downloads

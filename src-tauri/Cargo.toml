@@ -27,6 +27,20 @@ tempfile = "3"
 jpeg-encoder = "0.7"
 png = "0.18"
 num-traits = "0.2"
+sha2 = "0.10"
+ureq = "3"
+
+# ONNX Runtime everywhere it ships binaries (not Intel macOS).
+[target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
+ort = { version = "=2.0.0-rc.13", features = ["ndarray"] }
+ndarray = "0.17"
+
+# GPU/NPU acceleration where available; Cargo unions these features with the table above.
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+ort = { version = "=2.0.0-rc.13", features = ["ndarray", "coreml"] }
+
+[target.'cfg(windows)'.dependencies]
+ort = { version = "=2.0.0-rc.13", features = ["ndarray", "directml"] }
 
 [profile.release]
 lto = "thin"

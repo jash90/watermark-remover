@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+.venv/
+.cache/
+src-tauri/resources/models/RealESRGAN_x4plus.onnx

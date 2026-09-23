@@ -10,6 +10,7 @@ Desktop application for removing watermarks from images. Everything runs locally
 
 - **Local Removal** - Fast-marching inpainting in pure Rust; detects the watermark's own pixels inside your selection and leaves the rest untouched
 - **Original Quality** - Output keeps the original resolution, transparency, and JPEG compression settings (no file-size growth)
+- **AI Upscaling** - 2×, 4× or 8× with Real-ESRGAN, fully offline (Intel Macs use high-quality Lanczos)
 - **Region Selection** - Select specific areas to remove with precision
 - **Batch Processing** - Process multiple images at once with the same region
 - **Before/After Preview** - Compare original and processed images side by side
@@ -78,6 +79,20 @@ npm run tauri build
 - **Backend**: Rust, Tauri
 - **Image processing**: `image`, `imageproc`, `jpeg-encoder` (pure Rust, no OpenCV)
 - **Styling**: CSS
+
+## Upscaling
+
+After loading an image (or after removing a watermark), pick 2×, 4× or 8× in the **Upscale** panel.
+
+- **AI — Fast** is built in (4.9 MB model).
+- **AI — Best quality** downloads a 67 MB model once. It is verified against a pinned SHA-256.
+- Results larger than 256 MP are refused before any work starts.
+- Transparency and colour profiles are kept.
+- On Apple Silicon a 1024×1024 image becomes 4096×4096 in about 4 seconds (CoreML).
+
+## Third-party models
+
+- Real-ESRGAN © 2021 Xintao Wang, BSD-3-Clause. The models were exported to ONNX with `scripts/export_upscalers.py`.
 
 ## License
 
