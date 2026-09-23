@@ -1,5 +1,6 @@
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::codecs::webp::WebPEncoder;
+use image::metadata::Orientation;
 use image::{DynamicImage, ImageEncoder, ImageReader};
 use jpeg_encoder::{ColorType, QuantizationTableType, SamplingFactor};
 use std::collections::HashMap;
@@ -18,6 +19,21 @@ pub fn load_oriented(path: &str) -> Result<DynamicImage, String> {
     let mut img = DynamicImage::from_decoder(decoder).map_err(|e| format!("Failed to decode image: {}", e))?;
     img.apply_orientation(orientation);
     Ok(img)
+}
+
+/// Displayed width and height (after EXIF orientation), read from the header only.
+pub fn read_dimensions(path: &str) -> Result<(u32, u32), String> {
+    let mut decoder = ImageReader::open(path)
+        .and_then(|r| r.with_guessed_format())
+        .map_err(|e| format!("Failed to open image: {}", e))?
+        .into_decoder()
+        .map_err(|e| format!("Failed to read image header: {}", e))?;
+    let (w, h) = image::ImageDecoder::dimensions(&decoder);
+    let orientation = image::ImageDecoder::orientation(&mut decoder).unwrap_or(Orientation::NoTransforms);
+    Ok(match orientation {
+        Orientation::Rotate90 | Orientation::Rotate270 | Orientation::Rotate90FlipH | Orientation::Rotate270FlipH => (h, w),
+        _ => (w, h),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -519,6 +535,16 @@ mod tests {
 
     fn is_red(p: image::Rgb<u8>) -> bool {
         p[0] > 180 && p[2] < 70
+    }
+
+    #[test]
+    fn read_dimensions_matches_decoded_orientation() {
+        for (orientation, name) in [(1u16, "wmr_d1.jpg"), (3, "wmr_d3.jpg"), (6, "wmr_d6.jpg"), (8, "wmr_d8.jpg")] {
+            let bytes = two_tone_jpeg(orientation);
+            let decoded = load_bytes(name, &bytes);
+            let path = std::env::temp_dir().join(name);
+            assert_eq!(read_dimensions(path.to_str().unwrap()).unwrap(), decoded.dimensions(), "orientation {orientation}");
+        }
     }
 
     #[test]

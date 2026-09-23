@@ -1,4 +1,3 @@
-use image::GenericImageView;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -28,5 +27,5 @@ impl Default for RemovalOptions {
 }
 
 pub fn get_image_dimensions(image_path: &str) -> Result<(u32, u32), String> {
-    Ok(crate::removal::codec::load_oriented(image_path)?.dimensions())
+    crate::removal::codec::read_dimensions(image_path)
 }
