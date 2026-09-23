@@ -211,7 +211,9 @@ fn read_png_palette(bytes: &[u8]) -> Option<PngPalette> {
         return None;
     }
     let colors = plte?
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .enumerate()
         .map(|(k, c)| [c[0], c[1], c[2], trns.and_then(|t| t.get(k).copied()).unwrap_or(255)])
         .collect();
