@@ -7,6 +7,7 @@ export interface WatermarkRegion {
 
 export interface RemovalOptions {
   lossless: boolean;
+  refine_mask: boolean;
 }
 
 export interface ProcessResult {

@@ -1,10 +1,11 @@
-use crate::gemini_client::GeminiClient;
 use crate::image_processor::{self, RemovalOptions, WatermarkRegion};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use crate::removal::codec;
+use crate::removal::engine::Engine;
+use crate::removal::pipeline::{self, PipelineOptions};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use tauri_plugin_store::StoreExt;
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -41,131 +42,55 @@ fn chrono_lite_timestamp() -> u64 {
         .unwrap_or(0)
 }
 
-const STORE_FILENAME: &str = "settings.json";
-const API_KEY_SETTING: &str = "gemini_api_key";
-
-fn get_stored_api_key(app: &tauri::AppHandle) -> Result<String, String> {
-    let store = app
-        .store(STORE_FILENAME)
-        .map_err(|e| format!("Failed to access store: {}", e))?;
-
-    let api_key = store
-        .get(API_KEY_SETTING)
-        .and_then(|v| v.as_str().map(|s| s.to_string()))
-        .unwrap_or_default();
-
-    Ok(api_key)
-}
-
 #[tauri::command]
 pub async fn remove_watermark(
-    app: tauri::AppHandle,
     image_path: String,
     region: WatermarkRegion,
     options: Option<RemovalOptions>,
 ) -> Result<ProcessResult, String> {
     let options = options.unwrap_or_default();
-
-    // Get original file size
     let original_size = fs::metadata(&image_path)
         .map_err(|e| format!("Failed to get original file size: {}", e))?
         .len();
 
-    // Get API key from store
-    let api_key = get_stored_api_key(&app)?;
+    // Decoding, inpainting and encoding are CPU-heavy: keep them off the async runtime.
+    let path = image_path.clone();
+    let (final_bytes, format) = tauri::async_runtime::spawn_blocking(move || {
+        let original = codec::load_oriented(&path)?;
+        let pipeline_options = PipelineOptions { refine_mask: options.refine_mask, grow: 2, feather: 0 };
+        let output = pipeline::run(&original, &region, &pipeline_options, &Engine::Telea { radius: 5 })?;
 
-    if api_key.is_empty() {
-        return Err("Gemini API key not configured. Please set it in Settings.".to_string());
-    }
-
-    let client = GeminiClient::new(api_key);
-
-    // Get original extension
-    let input_path = PathBuf::from(&image_path);
-    let original_extension = input_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("png");
-
-    // Call Gemini API
-    let processed_bytes = client
-        .remove_watermark(&image_path, &region)
-        .await?;
-
-    // Apply lossless re-encoding if requested
-    let (final_bytes, final_extension) = if options.lossless {
-        reencode_lossless(&processed_bytes, original_extension)?
-    } else {
-        (processed_bytes, original_extension.to_string())
-    };
-
+        let original_extension = PathBuf::from(&path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("png")
+            .to_string();
+        let format = codec::output_format(&original_extension, options.lossless);
+        // Store the result the way the source was stored (JPEG tables, PNG palette,
+        // colour profile) so the file doesn't grow and colours don't shift.
+        let hints = fs::read(&path).map(|b| codec::read_source_hints(&b)).unwrap_or_default();
+        Ok::<_, String>((codec::encode(&output.image, format, &hints)?, format))
+    })
+    .await
+    .map_err(|e| format!("Processing task failed: {}", e))??;
     let processed_size = final_bytes.len() as u64;
 
-    // Generate unique output filename with final extension
     let output_filename = format!(
         "processed_{}_{}.{}",
         Uuid::new_v4().to_string().split('-').next().unwrap_or("img"),
         chrono_lite_timestamp(),
-        final_extension
+        format.extension()
     );
-
-    let temp_dir = get_temp_dir()?;
-    let output_path = temp_dir.join(&output_filename);
-    let output_path_str = output_path.to_string_lossy().to_string();
-
-    // Save the result
+    let output_path = get_temp_dir()?.join(&output_filename);
     fs::write(&output_path, &final_bytes)
         .map_err(|e| format!("Failed to save processed image: {}", e))?;
 
-    // Encode as base64 for preview
-    let base64_preview = BASE64.encode(&final_bytes);
-
-    // Determine MIME type based on final extension
-    let mime_type = match final_extension.to_lowercase().as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "webp" => "image/webp",
-        "gif" => "image/gif",
-        _ => "image/png",
-    };
-
     Ok(ProcessResult {
-        output_path: output_path_str,
-        base64_preview: Some(format!("data:{};base64,{}", mime_type, base64_preview)),
+        output_path: output_path.to_string_lossy().to_string(),
+        base64_preview: Some(format!("data:{};base64,{}", format.mime(), BASE64.encode(&final_bytes))),
         original_size,
         processed_size,
     })
-}
-
-/// Re-encode image bytes with lossless compression using the image crate
-fn reencode_lossless(bytes: &[u8], original_ext: &str) -> Result<(Vec<u8>, String), String> {
-    use image::ImageFormat;
-    use std::io::Cursor;
-
-    // Decode image from bytes
-    let img = image::load_from_memory(bytes)
-        .map_err(|e| format!("Failed to decode image for lossless re-encoding: {}", e))?;
-
-    let (format, ext) = match original_ext.to_lowercase().as_str() {
-        "jpg" | "jpeg" => {
-            // JPEG doesn't support lossless - convert to PNG
-            (ImageFormat::Png, "png")
-        }
-        "webp" => {
-            // WebP lossless - use PNG as fallback since image crate doesn't support lossless WebP encoding
-            (ImageFormat::Png, "png")
-        }
-        _ => {
-            // PNG and others - use PNG lossless
-            (ImageFormat::Png, "png")
-        }
-    };
-
-    let mut output_buf = Cursor::new(Vec::new());
-    img.write_to(&mut output_buf, format)
-        .map_err(|e| format!("Failed to encode lossless image: {}", e))?;
-
-    Ok((output_buf.into_inner(), ext.to_string()))
 }
 
 #[tauri::command]
@@ -212,56 +137,12 @@ pub async fn save_processed_image(source_path: String, destination_path: String)
 pub async fn cleanup_temp_files() -> Result<(), String> {
     let temp_dir = get_temp_dir()?;
     if temp_dir.exists() {
-        for entry in fs::read_dir(&temp_dir).map_err(|e| format!("Failed to read temp dir: {}", e))? {
-            if let Ok(entry) = entry {
-                let _ = fs::remove_file(entry.path());
-            }
+        for entry in fs::read_dir(&temp_dir)
+            .map_err(|e| format!("Failed to read temp dir: {}", e))?
+            .flatten()
+        {
+            let _ = fs::remove_file(entry.path());
         }
     }
     Ok(())
-}
-
-#[tauri::command]
-pub async fn set_gemini_api_key(app: tauri::AppHandle, api_key: String) -> Result<(), String> {
-    let store = app
-        .store(STORE_FILENAME)
-        .map_err(|e| format!("Failed to access store: {}", e))?;
-
-    store
-        .set(API_KEY_SETTING, serde_json::json!(api_key));
-
-    store
-        .save()
-        .map_err(|e| format!("Failed to save store: {}", e))?;
-
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn get_gemini_api_key(app: tauri::AppHandle) -> Result<String, String> {
-    get_stored_api_key(&app)
-}
-
-#[tauri::command]
-pub async fn test_gemini_connection(app: tauri::AppHandle) -> Result<bool, String> {
-    let api_key = get_stored_api_key(&app)?;
-
-    if api_key.is_empty() {
-        return Err("API key not configured".to_string());
-    }
-
-    let client = GeminiClient::new(api_key);
-    client.test_connection().await
-}
-
-#[tauri::command]
-pub async fn list_gemini_models(app: tauri::AppHandle) -> Result<Vec<String>, String> {
-    let api_key = get_stored_api_key(&app)?;
-
-    if api_key.is_empty() {
-        return Err("API key not configured".to_string());
-    }
-
-    let client = GeminiClient::new(api_key);
-    client.list_models().await
 }

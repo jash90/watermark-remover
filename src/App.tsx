@@ -1,19 +1,20 @@
 import { useState, useCallback, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { save, open } from '@tauri-apps/plugin-dialog';
 import { ImageDropZone } from './components/ImageDropZone';
 import { RegionSelector } from './components/RegionSelector';
 import { PreviewPanel } from './components/PreviewPanel';
 import { OptionsPanel } from './components/OptionsPanel';
-import { SettingsModal } from './components/SettingsModal';
 import { BatchQueuePanel } from './components/BatchQueuePanel';
 import { useWatermarkRemoval } from './hooks/useWatermarkRemoval';
-import type { WatermarkRegion, RemovalOptions, ImageInfo, BatchFile, BatchProgress } from './types/watermark';
+import type { WatermarkRegion, RemovalOptions, ImageInfo, BatchFile, BatchProgress, ProcessResult } from './types/watermark';
 import './App.css';
 
 type AppStage = 'upload' | 'select' | 'preview' | 'batch-select' | 'batch-processing' | 'batch-results';
 
 const DEFAULT_OPTIONS: RemovalOptions = {
   lossless: false,
+  refine_mask: true,
 };
 
 function App() {
@@ -27,7 +28,6 @@ function App() {
   const [processedPath, setProcessedPath] = useState<string | null>(null);
   const [originalSize, setOriginalSize] = useState<number | null>(null);
   const [processedSize, setProcessedSize] = useState<number | null>(null);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   // Batch processing state
   const [batchFiles, setBatchFiles] = useState<BatchFile[]>([]);
@@ -36,21 +36,13 @@ function App() {
   const {
     isProcessing,
     error,
-    hasApiKey,
     removeWatermark,
     getImageInfo,
     loadImageBase64,
     saveProcessedImage,
     cleanupTempFiles,
-    checkApiKey,
     clearError,
   } = useWatermarkRemoval();
-
-  // Refresh API key status when settings modal closes
-  const handleSettingsClose = useCallback(() => {
-    setIsSettingsOpen(false);
-    checkApiKey();
-  }, [checkApiKey]);
 
   // Cleanup temp files on unmount
   useEffect(() => {
@@ -138,18 +130,12 @@ function App() {
       handleBatchFileUpdate(file.id, { status: 'processing' });
 
       try {
-        const result = await removeWatermark(file.path, selectedRegion, options);
-        if (result) {
-          handleBatchFileUpdate(file.id, {
-            status: 'completed',
-            processedPath: result.output_path,
-          });
-        } else {
-          handleBatchFileUpdate(file.id, {
-            status: 'failed',
-            error: error || 'Processing failed',
-          });
-        }
+        const result = await invoke<ProcessResult>('remove_watermark', {
+          imagePath: file.path,
+          region: selectedRegion,
+          options,
+        });
+        handleBatchFileUpdate(file.id, { status: 'completed', processedPath: result.output_path });
       } catch (err) {
         handleBatchFileUpdate(file.id, {
           status: 'failed',
@@ -160,7 +146,7 @@ function App() {
 
     setBatchProgress(null);
     setStage('batch-results');
-  }, [selectedRegion, batchFiles, options, removeWatermark, handleBatchFileUpdate, error]);
+  }, [selectedRegion, batchFiles, options, handleBatchFileUpdate]);
 
   // Handler for saving all batch results
   const handleSaveBatch = useCallback(async () => {
@@ -292,26 +278,6 @@ function App() {
               </button>
             </>
           )}
-          <button
-            className="btn btn-icon"
-            onClick={() => setIsSettingsOpen(true)}
-            title="Settings"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-          </button>
         </div>
       </header>
 
@@ -344,7 +310,6 @@ function App() {
                   options={options}
                   onChange={setOptions}
                   disabled={isProcessing}
-                  hasApiKey={hasApiKey}
                 />
                 {selectedRegion && (
                   <div className="region-info">
@@ -360,7 +325,7 @@ function App() {
                 <button
                   className="btn btn-primary btn-large"
                   onClick={handleRemoveWatermark}
-                  disabled={!selectedRegion || isProcessing || !hasApiKey}
+                  disabled={!selectedRegion || isProcessing}
                 >
                   {isProcessing ? (
                     <>
@@ -397,7 +362,6 @@ function App() {
                   options={options}
                   onChange={setOptions}
                   disabled={isProcessing}
-                  hasApiKey={hasApiKey}
                 />
                 {selectedRegion && (
                   <div className="region-info">
@@ -416,7 +380,7 @@ function App() {
                 <button
                   className="btn btn-primary btn-large"
                   onClick={handleProcessBatch}
-                  disabled={!selectedRegion || isProcessing || batchFiles.length === 0 || !hasApiKey}
+                  disabled={!selectedRegion || isProcessing || batchFiles.length === 0}
                 >
                   Process All ({batchFiles.length} files)
                 </button>
@@ -509,10 +473,9 @@ function App() {
       </main>
 
       <footer className="app-footer">
-        <p>Powered by Google Gemini AI</p>
+        <p>Runs locally — images never leave your computer</p>
       </footer>
 
-      <SettingsModal isOpen={isSettingsOpen} onClose={handleSettingsClose} />
     </div>
   );
 }

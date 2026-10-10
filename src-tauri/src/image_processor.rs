@@ -11,25 +11,22 @@ pub struct WatermarkRegion {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RemovalOptions {
-    #[serde(default = "default_lossless")]
+    #[serde(default)]
     pub lossless: bool,
+    #[serde(default = "default_refine_mask")]
+    pub refine_mask: bool,
 }
 
-fn default_lossless() -> bool {
-    false
+fn default_refine_mask() -> bool {
+    true
 }
 
 impl Default for RemovalOptions {
     fn default() -> Self {
-        Self {
-            lossless: default_lossless(),
-        }
+        Self { lossless: false, refine_mask: default_refine_mask() }
     }
 }
 
 pub fn get_image_dimensions(image_path: &str) -> Result<(u32, u32), String> {
-    let img = image::open(image_path)
-        .map_err(|e| format!("Failed to load image: {}", e))?;
-
-    Ok(img.dimensions())
+    Ok(crate::removal::codec::load_oriented(image_path)?.dimensions())
 }

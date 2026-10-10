@@ -1,6 +1,6 @@
 # Watermark Remover
 
-Desktop application for removing watermarks from images using AI-powered inpainting with Google Gemini.
+Desktop application for removing watermarks from images. Everything runs locally: no API key, no internet connection, and your images never leave your computer.
 
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -8,7 +8,8 @@ Desktop application for removing watermarks from images using AI-powered inpaint
 
 ## Features
 
-- **AI-Powered Removal** - Uses Google Gemini AI for intelligent watermark inpainting
+- **Local Removal** - Fast-marching inpainting in pure Rust; detects the watermark's own pixels inside your selection and leaves the rest untouched
+- **Original Quality** - Output keeps the original resolution, transparency, and JPEG compression settings (no file-size growth)
 - **Region Selection** - Select specific areas to remove with precision
 - **Batch Processing** - Process multiple images at once with the same region
 - **Before/After Preview** - Compare original and processed images side by side
@@ -31,19 +32,13 @@ Download the latest release for your platform:
 
 [Download Latest Release](https://github.com/jash90/watermark-remover/releases/latest)
 
-## Requirements
-
-- **Google Gemini API Key** - Get one free at [Google AI Studio](https://aistudio.google.com/apikey)
-- **Internet connection** - Required for AI processing
-
 ## Usage
 
 1. Launch the application
-2. Enter your Google Gemini API key in Settings
-3. Drop an image or click to browse
-4. Draw a rectangle around the watermark area
-5. Click "Remove Watermark"
-6. Preview the result and save
+2. Drop an image or click to browse
+3. Draw a rectangle around the watermark area
+4. Click "Remove Watermark"
+5. Preview the result and save
 
 ### Batch Processing
 
@@ -81,7 +76,7 @@ npm run tauri build
 
 - **Frontend**: React, TypeScript, Vite
 - **Backend**: Rust, Tauri
-- **AI**: Google Gemini API
+- **Image processing**: `image`, `imageproc`, `jpeg-encoder` (pure Rust, no OpenCV)
 - **Styling**: CSS
 
 ## License

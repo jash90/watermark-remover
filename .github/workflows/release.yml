@@ -121,16 +121,13 @@ jobs:
           releaseBody: |
             ## Watermark Remover
 
-            Desktop application for removing watermarks from images using AI.
+            Desktop application for removing watermarks from images. Runs fully offline.
 
             ### Features
-            - AI-powered watermark removal with Google Gemini
-            - Before/After comparison
-            - Simple and lightweight
-
-            ### Requirements
-            - Google Gemini API key
-            - Internet connection
+            - Local watermark removal (no API key, no internet, images never leave your computer)
+            - Detects the watermark's shape inside the selection and keeps the rest of the image untouched
+            - Output keeps the original resolution and JPEG file size
+            - Before/After comparison and batch processing
 
             ### Downloads
             - **Windows**: `.msi` or `.exe` installer
