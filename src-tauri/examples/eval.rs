@@ -80,7 +80,7 @@ fn main() {
         for opacity in [0.35f32, 0.6, 1.0] {
             let (marked, region) = stamp(clean, opacity);
             for refine in [false, true] {
-                let opts = PipelineOptions { refine_mask: refine, grow: 2, feather: 3 };
+                let opts = PipelineOptions { refine_mask: refine, grow: 2, feather: 0 };
                 let src = DynamicImage::ImageRgb8(marked.clone());
                 let out = run(&src, &region, &opts, &Engine::Telea { radius: 5 }).expect("pipeline");
                 println!(

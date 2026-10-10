@@ -57,7 +57,7 @@ pub async fn remove_watermark(
     let path = image_path.clone();
     let (final_bytes, format) = tauri::async_runtime::spawn_blocking(move || {
         let original = codec::load_oriented(&path)?;
-        let pipeline_options = PipelineOptions { refine_mask: options.refine_mask, grow: 2, feather: 3 };
+        let pipeline_options = PipelineOptions { refine_mask: options.refine_mask, grow: 2, feather: 0 };
         let output = pipeline::run(&original, &region, &pipeline_options, &Engine::Telea { radius: 5 })?;
 
         let original_extension = PathBuf::from(&path)

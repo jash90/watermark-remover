@@ -11,7 +11,11 @@ pub struct PipelineOptions {
     pub refine_mask: bool,
     /// Pixels added around the mask to catch anti-aliased watermark edges.
     pub grow: u8,
-    /// Width of the blended seam between the patch and the original.
+    /// Width of the blended seam between the patch and the original. It only has an
+    /// effect where the engine changed pixels outside the hole (an engine that repaints
+    /// the whole crop). Telea leaves them byte-identical and is already continuous at the
+    /// hole boundary, so callers use 0: inpainting a wider band just to feather it replaces
+    /// real pixels and costs 1-9 dB PSNR in `examples/eval.rs`.
     pub feather: u8,
 }
 
@@ -87,6 +91,20 @@ mod tests {
         assert_eq!(b.get_pixel(10, 10), a.get_pixel(10, 10));
         assert_eq!(b.get_pixel(299, 199), a.get_pixel(299, 199));
         assert_eq!(b.get_pixel(100 - 7, 90), a.get_pixel(100 - 7, 90));
+    }
+
+    #[test]
+    fn telea_leaves_pixels_outside_the_hole_byte_identical() {
+        let src = DynamicImage::ImageRgb8(RgbImage::from_fn(120, 120, |x, y| Rgb([x as u8, y as u8, 90])));
+        let o = PipelineOptions { refine_mask: false, grow: 0, feather: 0 };
+        let out = run(&src, &region(50, 50, 20, 20), &o, &Engine::Telea { radius: 5 }).unwrap();
+        let (a, b) = (src.to_rgb8(), out.image.to_rgb8());
+        for (x, y, p) in a.enumerate_pixels() {
+            let inside = (50..70).contains(&x) && (50..70).contains(&y);
+            if !inside {
+                assert_eq!(b.get_pixel(x, y), p, "({x}, {y})");
+            }
+        }
     }
 
     #[test]
