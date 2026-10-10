@@ -296,6 +296,9 @@ fn encode_jpeg(img: &DynamicImage, profile: Option<&JpegProfile>, icc: Option<&[
     );
     let mut buf = Vec::new();
     let mut encoder = jpeg_encoder::Encoder::new(&mut buf, FALLBACK_JPEG_QUALITY);
+    // The default fixed Huffman tables (T.81 K.3) make the output larger than sources
+    // written with optimized tables (mozjpeg, jpegoptim, every progressive JPEG).
+    encoder.set_optimized_huffman_tables(true);
     let sampling = profile
         .and_then(|p| SamplingFactor::from_factors(p.sampling.0, p.sampling.1))
         .unwrap_or(SamplingFactor::F_2_2);
@@ -385,6 +388,30 @@ mod tests {
             out.len(),
             src.len()
         );
+    }
+
+    /// Re-encoding must not grow sources whose Huffman tables are already optimized,
+    /// baseline or progressive (both carry image-specific DHT segments).
+    #[test]
+    fn reencoding_optimized_or_progressive_source_does_not_grow() {
+        let img = textured(400, 300);
+        for progressive in [false, true] {
+            let mut src = Vec::new();
+            let mut enc = jpeg_encoder::Encoder::new(&mut src, 80);
+            enc.set_sampling_factor(jpeg_encoder::SamplingFactor::F_2_2);
+            enc.set_optimized_huffman_tables(true);
+            enc.set_progressive(progressive);
+            enc.encode(img.as_raw(), 400, 300, jpeg_encoder::ColorType::Rgb).unwrap();
+            let hints = SourceHints { jpeg: read_jpeg_profile(&src), ..Default::default() };
+            let decoded = image::load_from_memory(&src).unwrap();
+            let out = encode(&decoded, OutputFormat::Jpeg, &hints).unwrap();
+            assert!(
+                out.len() <= src.len() * 101 / 100,
+                "progressive={progressive}: re-encoded {} bytes vs source {} bytes",
+                out.len(),
+                src.len()
+            );
+        }
     }
 
     #[test]
