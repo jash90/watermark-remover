@@ -285,10 +285,10 @@ git commit -m "test(codec): pin EXIF orientation 3/6/8 pixel placement"
 ```rust
     #[test]
     fn read_dimensions_matches_decoded_orientation() {
-        for (orientation, name) in [(1u16, "wmr_d1.jpg"), (3, "wmr_d3.jpg"), (6, "wmr_d6.jpg"), (8, "wmr_d8.jpg")] {
+        for (orientation, name) in (1u16..=8).map(|o| (o, format!("wmr_d{o}.jpg"))) {
             let bytes = two_tone_jpeg(orientation);
-            let decoded = load_bytes(name, &bytes);
-            let path = std::env::temp_dir().join(name);
+            let decoded = load_bytes(&name, &bytes);
+            let path = std::env::temp_dir().join(&name);
             assert_eq!(read_dimensions(path.to_str().unwrap()).unwrap(), decoded.dimensions(), "orientation {orientation}");
         }
     }

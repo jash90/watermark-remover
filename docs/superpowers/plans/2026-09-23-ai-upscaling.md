@@ -1313,7 +1313,7 @@ git commit -m "feat(ui): upscale panel (2x/4x/8x, fast/quality, progress, cancel
 - Modify: `README.md` (feature list, "Upscaling" section, third-party licences), `.github/workflows/release.yml` (release body)
 
 - [ ] **Step 1:** Add to README:
-  - **Features:** "**AI Upscaling** - 2×, 4× or 8× with Real-ESRGAN, fully offline (Intel Macs use high-quality Lanczos)."
+  - **Features:** "**AI Upscaling** - 2×, 4× or 8× with Real-ESRGAN. The Fast model is bundled and works offline; Best quality downloads its model once, on first use (Intel Macs use high-quality Lanczos)."
   - A "Third-party models" section: "Real-ESRGAN © 2021 Xintao Wang, BSD-3-Clause. Models exported to ONNX with `scripts/export_upscalers.py`."
 - [ ] **Step 2:** Add the same feature line to the `releaseBody` in `release.yml`.
 - [ ] **Step 3: Commit**

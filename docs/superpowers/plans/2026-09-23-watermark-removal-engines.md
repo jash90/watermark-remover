@@ -8,6 +8,8 @@
 
 **Tech Stack:** Tauri 2, Rust (`image` 0.25.9, `imageproc` 0.25, `tokio`, `reqwest`), React 19 + TypeScript. Later milestones: `ort` 2.0 (ONNX Runtime) + LaMa ONNX.
 
+> **Status (2026-09-23):** Milestone 1 has landed and the code diverged from this plan where noted in the commits; the code is the source of truth. In particular `pipeline::run` is synchronous and the whole decode → pipeline → encode path runs inside `spawn_blocking`; `codec::encode` takes `SourceHints` (JPEG tables and sampling, PNG palette, ICC); and the Gemini engine, API-key commands and settings UI from Tasks 7-8 were dropped (commit `32bbc5c`). Treat those steps as history, not as work to do.
+
 **Spec:** This document. Part I is the analysis and design, Part II covers the tasks for Milestone 1, and Part III is the roadmap for the later milestones. Each later milestone gets its own detailed plan once Milestone 1 lands.
 
 ---
@@ -41,7 +43,7 @@ The model choice isn't the main problem. The way the model gets used is. In orde
 | 7 | **API key in the URL query string.** | `gemini_client.rs:151, 213, 236` | The key ends up in proxy logs and error strings (`format!("API request failed: {}", e)` includes the URL). Use the `x-goog-api-key` header. |
 | 8 | **EXIF orientation ignored.** | `image_processor.rs:31` | The webview shows phone JPEGs rotated (it honours EXIF), but Rust reports unrotated dimensions. With a real mask, the region would land on the wrong pixels. |
 | 9 | **Refusals are hidden.** | `gemini_client.rs:199-210` | When Gemini answers with text only (a policy refusal is common for "remove watermark"), the user sees "No image found in API response" and the model's actual explanation is lost. |
-| 10 | **Batch loop reports a stale error.** | `App.tsx:141-151` | `error || 'Processing failed'` reads the `error` captured when the callback was created, not the one from the failed call. `processBatch` in the hook is a duplicate and isn't used. |
+| 10 | **Batch loop reports a stale error.** | `App.tsx:141-151` | `error \|\| 'Processing failed'` reads the `error` captured when the callback was created, not the one from the failed call. `processBatch` in the hook is a duplicate and isn't used. |
 | 11 | **No tests at all.** | — | Neither `cargo test` nor a JS test runner covers anything. |
 
 **Conclusion:** switching to a different model without fixing #1–#2 keeps most of the damage. Whatever backend is chosen, the fix is the same: **mask → crop → inpaint crop → composite onto the original**. That is Milestone 1, and every option below builds on it.

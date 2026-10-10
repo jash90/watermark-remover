@@ -55,7 +55,7 @@ Setup: PSNR in the watermark rectangle against the clean original. "telea" is th
 
 ## File Structure
 
-```
+```text
 src-tauri/examples/bench_translucent.rs   CREATE  ground-truth benchmark + ghost metric
 src-tauri/src/removal/unblend.rs          CREATE  estimate_watermark(), recover_interior()
 src-tauri/src/removal/mod.rs              MODIFY  pub mod unblend;
@@ -85,6 +85,7 @@ docs/superpowers/reports/2026-xx-translucent-spike.md    CREATE  go/no-go report
 //! Usage: cargo run --release --example bench_translucent [-- <folder with clean photos>]
 use image::{imageops, DynamicImage, GrayImage, Luma, Rgb, RgbImage};
 use watermark_remover_lib::image_processor::WatermarkRegion;
+use watermark_remover_lib::removal::composite::composite;
 use watermark_remover_lib::removal::geometry::{clamp_region, context_margin, expand};
 use watermark_remover_lib::removal::mask::rect_mask;
 use watermark_remover_lib::removal::refine::refine_mask;
@@ -198,7 +199,8 @@ fn telea_result(case: &Case) -> RgbImage {
     let m = refine_mask(&c, &rect_mask(crop, hole), 2, None).unwrap().mask;
     let patch = telea::inpaint(&c, &m, 5).unwrap();
     let mut out = case.marked.clone();
-    imageops::replace(&mut out, &patch, crop.x as i64, crop.y as i64);
+    // Same seam as the production pipeline (`commands.rs` uses feather 0).
+    composite(&mut out, &patch, crop, &m, 0);
     out
 }
 
@@ -474,7 +476,7 @@ pub fn recover_interior(crop: &RgbImage, mask: &GrayImage, bg: &RgbImage, est: &
 - [ ] **Step 4: Run to verify pass**
 
 Run: `cd src-tauri && cargo test --lib removal::unblend`
-Expected: 5 passed. If `recovers_texture_under_the_watermark` exceeds 6, print the α estimate. The ±0.04 opacity tolerance, amplified by 1/(1−α) = 2, bounds the error at about 6 levels.
+Expected: 5 passed. If `recovers_texture_under_the_watermark` exceeds 6, print the α estimate. The reconstruction error is |α−α̂|·|W−J|/(1−α̂): for this sample (α = 0.5, W = 255, J ≈ 100) the ±0.04 opacity tolerance allows about 11.5–13.5 levels, so a result above 6 means the α estimate is off by roughly 0.02 or more.
 
 - [ ] **Step 5: Wire it into the benchmark.** In `bench_translucent.rs`, replace `candidate_result` with:
 
@@ -501,7 +503,8 @@ fn candidate_result(case: &Case) -> RgbImage {
         None => bg,
     };
     let mut out = case.marked.clone();
-    imageops::replace(&mut out, &patch, crop.x as i64, crop.y as i64);
+    // Same seam as the production pipeline (`commands.rs` uses feather 0).
+    composite(&mut out, &patch, crop, &m, 0);
     out
 }
 ```
